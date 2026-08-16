@@ -1,0 +1,7 @@
+# ==============================================================================
+# ENTERPRISE AGENTIC RAG - REQUIREMENTS (Local, No GCP)
+# ==============================================================================
+#
+# This file grows one stage at a time as the course progresses. Nothing has
+# been taught yet on this branch, so there are no dependencies pinned here —
+# Stage 1 (Data Ingestion) adds the first ones.
