@@ -1,0 +1,1 @@
+@.claude/git-conventions.md
