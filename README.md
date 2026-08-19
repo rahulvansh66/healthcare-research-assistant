@@ -37,16 +37,32 @@ graph TD
 
 ## Setup
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+### Prerequisites
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (preferred) — or `pip` with `requirements.txt` as a fallback
+
+### Installation
 
 ```bash
+# Preferred: uv resolves and installs from pyproject.toml / uv.lock
 uv sync
+
+# Fallback: pip with the exported lockfile (requirements.txt is auto-generated
+# via `uv export --format requirements.txt --no-hashes -o requirements.txt`)
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Configuration
+
+```bash
 cp .env.example .env
 ```
 
 Fill in `.env` with your own credentials — see the comments in `.env.example` for what each variable is for.
 
-## Running Ingestion
+## Ingestion
 
 Parses documents from `DATA/`, chunks them (`app/ingestion/chunking/splitter.py`), embeds locally with `NeuML/biomedbert-small-embeddings`, and indexes them into the Qdrant collection.
 
@@ -60,7 +76,7 @@ uv run python -m app.ingestion.processor DATA/true_data true
 
 Parsed chunks + metadata are also saved locally to `processed_data/<source_type>/<filename>.json` for inspection.
 
-## Running the Retrieval Pipeline (API + UI)
+## Retrieval Pipeline (API + UI)
 
 Ingestion must have completed at least once (a populated Qdrant collection) before querying.
 
@@ -72,7 +88,16 @@ uv run uvicorn app.main:app --reload
 uv run streamlit run streamlit_app.py
 ```
 
-- Backend: `http://127.0.0.1:8000` — `GET /` health check, `GET /graph` for the LangGraph agent diagram, `POST /query` with `{"q": "...", "thread_id": "..."}`
-- Frontend: `http://127.0.0.1:8501` — chat UI that calls the backend at `BACKEND_URL`, with per-conversation memory via `thread_id` and expandable sources/thought-process panels per answer
+**Backend** — `http://127.0.0.1:8000`
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Health check |
+| `GET` | `/graph` | LangGraph agent diagram |
+| `POST` | `/query` | Submit a query — body `{"q": "...", "thread_id": "..."}` |
+
+**Frontend** — `http://127.0.0.1:8501`
+
+Chat UI that calls the backend at `BACKEND_URL`, with per-conversation memory via `thread_id` and expandable sources/thought-process panels per answer.
 
 Each query flows through NeMo Guardrails first (blocks off-topic/jailbreak input before it reaches the agent), then the LangGraph agent (`app/agents/graph.py`): a planner decides whether the message is conversational or needs retrieval, an optional retriever queries Qdrant and reranks with FlashRank, and a responder generates the grounded answer via the Portkey-routed Groq model.
