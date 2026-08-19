@@ -5,13 +5,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings:
-    # --- GEMINI EMBEDDINGS ---
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-    # --- VECTOR DB (QDRANT) ---
+    # --- VECTOR DB (QDRANT) — session-scoped cache of live PubMed results,
+    #     filtered by thread_id payload. Not a static pre-ingested corpus. ---
     QDRANT_URL = os.getenv("QDRANT_CLUSTER_ENDPOINT")
     QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-    QDRANT_COLLECTION = "enterprise_rag"
+    QDRANT_COLLECTION = "pubmed_session_cache"
+
+    # --- PUBMED / NCBI E-UTILITIES ---
+    # Secrets: .env only, never hardcoded.
+    NCBI_API_KEY = os.getenv("NCBI_API_KEY")              # optional; unlocks 10 req/s vs 3 req/s
+    NCBI_CONTACT_EMAIL = os.getenv("NCBI_CONTACT_EMAIL")  # required by NCBI usage guidelines
+    NCBI_TOOL_NAME = os.getenv("NCBI_TOOL_NAME", "medico-healthcare-research-assistant")
+    NCBI_EUTILS_BASE_URL = os.getenv("NCBI_EUTILS_BASE_URL", "https://eutils.ncbi.nlm.nih.gov/entrez/eutils")
+    NCBI_REQUEST_TIMEOUT = int(os.getenv("NCBI_REQUEST_TIMEOUT", "15"))
+
+    # --- SESSION CACHE / RETRIEVAL TUNING ---
+    PUBMED_FETCH_LIMIT = int(os.getenv("PUBMED_FETCH_LIMIT", "20"))
+    PUBMED_STORE_TOP_N = int(os.getenv("PUBMED_STORE_TOP_N", "10"))
+    EVIDENCE_TOP_N = int(os.getenv("EVIDENCE_TOP_N", "5"))
+    SESSION_CACHE_QUERY_LIMIT = int(os.getenv("SESSION_CACHE_QUERY_LIMIT", "10"))
+    SESSION_CACHE_RELEVANCE_THRESHOLD = float(os.getenv("SESSION_CACHE_RELEVANCE_THRESHOLD", "0.35"))
 
     # --- REASONING ENGINE (GROQ) ---
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")

@@ -10,9 +10,10 @@ load_dotenv()
 logfire.configure(token=os.getenv("LOGFIRE_TOKEN"))
 
 # Now safe to import app modules - logfire is already active
-from fastapi import FastAPI, Response
+from fastapi import BackgroundTasks, FastAPI, Response
 from app.agents.graph import rag_agent
 from app.guardrails import initialize_rails, guard
+from app.services.retrieval.qdrant_service import store_session_results
 
 from pydantic import BaseModel
 from typing import Optional
@@ -29,6 +30,7 @@ def startup_event():
 class QueryRequest(BaseModel):
     q: str
     thread_id: Optional[str] = "default_user"
+    pubmed_search_requested: bool = False
 
 
 @app.get("/")
@@ -49,7 +51,7 @@ def get_graph_image():
 
 
 @app.post("/query")
-def query(request: QueryRequest):
+def query(request: QueryRequest, background_tasks: BackgroundTasks):
     """
     Executes the LangGraph RAG flow with memory using a POST request.
     """
@@ -59,7 +61,14 @@ def query(request: QueryRequest):
     initial_state = {
         "messages": [{"role": "user", "content": q}],
         "current_query": q,
+        "search_params": None,
+        "pubmed_search_requested": request.pubmed_search_requested,
+        "fresh_search_requested": False,
+        "retrieval_source": "none",
         "documents": [],
+        "evidence": [],
+        "citations": [],
+        "_background_store_payload": None,
         "plan": ["Start"],
         "status": "Initializing Graph..."
     }
@@ -77,19 +86,29 @@ def query(request: QueryRequest):
                 "answer": rail_response,
                 "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
                 "status": "Blocked by guardrails.",
-                "sources": []
+                "sources": [],
+                "citations": []
             }
 
         # Gate 2: LangGraph RAG pipeline
         # Run the graph synchronously to preserve Logfire context variables
         final_output = rag_agent.invoke(initial_state, config=config)
 
+        if final_output.get("retrieval_source") == "live_pubmed":
+            background_tasks.add_task(
+                store_session_results,
+                thread_id=thread_id,
+                query=q,
+                documents=final_output.get("_background_store_payload") or [],
+            )
+
         return {
             "question": q,
             "answer": final_output.get("final_answer"),
             "thought_process": final_output.get("plan"),
             "status": final_output.get("status"),
-            "sources": final_output.get("documents", [])
+            "sources": final_output.get("documents", []),
+            "citations": final_output.get("citations", [])
         }
     except Exception as e:
         logfire.error(f"❌ Backend Execution Failed: {e}")
@@ -98,5 +117,6 @@ def query(request: QueryRequest):
             "answer": "I apologize, but I encountered an internal error while processing your request. Please try again later.",
             "thought_process": ["Error encountered during execution."],
             "status": "error",
-            "sources": []
+            "sources": [],
+            "citations": []
         }

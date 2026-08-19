@@ -3,6 +3,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.agents.state import AgentState
 from app.agents.nodes.planner import planner_node
 from app.agents.nodes.retriever import retrieve_node
+from app.agents.nodes.evidence import evidence_agent_node
 from app.agents.nodes.responder import generate_node
 
 
@@ -13,6 +14,7 @@ workflow = StateGraph(AgentState)
 # 2. Define the Nodes
 workflow.add_node("planner", planner_node)
 workflow.add_node("retriever", retrieve_node)
+workflow.add_node("evidence_agent", evidence_agent_node)
 workflow.add_node("responder", generate_node)
 
 # 3. Define the Edges & Routing Logic
@@ -38,7 +40,8 @@ workflow.add_conditional_edges(
 )
 
 
-workflow.add_edge("retriever", "responder")
+workflow.add_edge("retriever", "evidence_agent")
+workflow.add_edge("evidence_agent", "responder")
 workflow.add_edge("responder", END)
 
 

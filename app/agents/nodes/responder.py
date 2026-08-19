@@ -4,11 +4,35 @@ from app.config import settings
 from app.gateway import portkey_client, extract_cache_status
 
 
+def _build_citations(evidence: list[dict], documents: list[dict]) -> list[dict]:
+    """Derive citations deterministically from evidence + documents — never
+    trust the LLM to reproduce them correctly in prose."""
+    docs_by_pmid = {d["pmid"]: d for d in documents}
+    seen = set()
+    citations = []
+    for e in evidence:
+        pmid = e["pmid"]
+        if pmid in seen:
+            continue
+        seen.add(pmid)
+        d = docs_by_pmid.get(pmid, {})
+        citations.append({
+            "pmid": pmid,
+            "title": d.get("title", ""),
+            "journal": d.get("journal", ""),
+            "year": d.get("year"),
+            "study_type": e["study_type"],
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+        })
+    return citations
+
+
 def generate_node(state: AgentState):
     """
-    Synthesizes a response using both Documentation Context AND Conversation History.
-    Uses the native Portkey client (not LangChain) so we can read the
-    x-portkey-cache-status response header and surface Cache: Hit in the UI.
+    Synthesizes a response from conversation history and, for clinical queries,
+    strictly from the structured Evidence extracted upstream. Uses the native
+    Portkey client (not LangChain) so we can read the x-portkey-cache-status
+    response header and surface Cache: Hit in the UI.
     """
     query = state["current_query"]
 
@@ -18,6 +42,7 @@ def generate_node(state: AgentState):
         history_str += f"{role}: {msg['content']}\n"
 
     user_msg = state["messages"][-1]["content"] if state["messages"] else ""
+    evidence = state.get("evidence", [])
 
     if query == "CONVERSATIONAL":
         logfire.info("Generating conversational response using memory.")
@@ -31,33 +56,47 @@ def generate_node(state: AgentState):
         LATEST MESSAGE:
         "{user_msg}"
         """
-    else:
-        logfire.info("Generating technical RAG response.")
-        max_context_chars = 25000
-        full_context = ""
-
-        for doc in state["documents"]:
-            if len(full_context) + len(doc) < max_context_chars:
-                full_context += doc + "\n\n"
-            else:
-                logfire.warning("Context truncated to fit Groq TPM limits.")
-                break
-
+    elif not evidence:
+        logfire.info("Generating insufficient-evidence response.")
         prompt = f"""
-        You are Medico, a healthcare research assistant. Answer the question using the
-        MEDICAL CONTEXT provided below, which is drawn from clinical guidelines and
-        health literature. Cite findings from the context rather than general knowledge,
-        and if the context does not contain enough information to answer safely,
-        say so plainly instead of guessing.
-
-        MEDICAL CONTEXT:
-        {full_context}
+        You are Medico, a healthcare research assistant. A PubMed search was performed
+        for the user's question, but the retrieved literature did not sufficiently
+        answer it. Explain plainly that you could not find sufficient evidence for this
+        specific question, invite the user to reformulate or narrow the question, and
+        do not speculate or answer from general knowledge.
 
         CONVERSATION HISTORY:
         {history_str}
 
         USER QUESTION:
         "{user_msg}"
+        """
+    else:
+        logfire.info("Generating evidence-grounded response.")
+        evidence_block = "\n\n".join(
+            f"[PMID {e['pmid']}] ({e['study_type']}, confidence={e['confidence']})\n"
+            f"Claim: {e['claim']}\nSupporting text: {e['evidence']}"
+            for e in evidence
+        )
+
+        prompt = f"""
+        You are Medico, a healthcare research assistant. Answer ONLY using the EVIDENCE
+        below. For every medical claim: cite the PMID, distinguish RCT vs
+        observational/meta-analysis evidence, note important limitations, and do not
+        invent evidence beyond what is given. If the evidence only partially covers the
+        question, say so plainly rather than filling gaps with general knowledge.
+
+        EVIDENCE:
+        {evidence_block}
+
+        CONVERSATION HISTORY:
+        {history_str}
+
+        USER QUESTION:
+        "{user_msg}"
+
+        End your answer with an "### Evidence" section listing each cited PMID and its
+        study type.
         """
 
     with logfire.span("✍️ LLM Synthesis"):
@@ -80,8 +119,11 @@ def generate_node(state: AgentState):
                 plan_update = state["plan"]
                 status = "Response generated."
 
+            citations = _build_citations(evidence, state.get("documents", [])) if evidence else []
+
             return {
                 "final_answer": content,
+                "citations": citations,
                 "status": status,
                 "plan": plan_update,
                 "messages": [{"role": "assistant", "content": content}]
