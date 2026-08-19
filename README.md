@@ -1,6 +1,7 @@
-# healthcare-research-assistant
+# Clinical Research Assistant
 
-Multi agent healthcare research assistant using LangGraph.
+* Engineered agentic workflow with LLM routing and query caching using Portkey, NeMo Guardrails, and Qdrant vector store.
+* Integrated MCP-based PubMed retrieval, RAGAS/DeepEval evaluation, and LangSmith/Logfire monitoring.
 
 ## Tech Stack
 
