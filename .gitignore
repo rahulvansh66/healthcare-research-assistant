@@ -56,3 +56,7 @@ tenvv
 
 # Logs
 *.log
+ingestion_log.txt
+
+# Generated ingestion output
+processed_data/
