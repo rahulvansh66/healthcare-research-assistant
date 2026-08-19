@@ -4,7 +4,6 @@ import uuid
 import json
 import logfire
 
-from bs4 import BeautifulSoup
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -15,15 +14,7 @@ from app.ingestion.loaders.html import parse_html
 from app.ingestion.loaders.text import parse_text
 from app.ingestion.chunking.splitter import chunk_text
 
-# Known canonical source URLs, keyed by filename in DATA/true_data/
-SOURCE_LINKS = {
-    "hypertension-WHO-guidelines-1-21.pdf": "https://iris.who.int/server/api/core/bitstreams/f062769d-f075-4a00-87af-0a2106e0bd04/content",
-    "covid-qna-by-WHO.html": "https://www.who.int/news-room/questions-and-answers/item/coronavirus-disease-covid-19#",
-}
-
-PREVIEW_CHARS = 200
-
-logfire.configure(service_name="enterprise-ingestion-service", send_to_logfire="if-token-present")
+logfire.configure(service_name="enterprise-ingestion-service")
 
 # Local folder where parsed + chunked JSON metadata is saved (replaces GCS processed bucket)
 PROCESSED_DATA_DIR = "processed_data"
@@ -33,25 +24,6 @@ qdrant_client = QdrantClient(
     url=settings.QDRANT_URL,
     api_key=settings.QDRANT_API_KEY,
 )
-
-
-def extract_title(full_text: str, file_path: str) -> str:
-    """Best-effort document title: <title> tag for HTML, else first non-empty line."""
-    ext = file_path.lower().rsplit(".", 1)[-1]
-    if ext in ("html", "htm"):
-        try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                soup = BeautifulSoup(f.read(), "html.parser")
-            if soup.title and soup.title.string and soup.title.string.strip():
-                return soup.title.string.strip()
-        except Exception:
-            pass
-
-    for line in full_text.splitlines():
-        line = line.strip()
-        if line:
-            return line[:PREVIEW_CHARS]
-    return ""
 
 
 def save_processed_locally(data: dict, source_type: str, filename: str) -> str:
@@ -92,24 +64,16 @@ def process_file(file_path: str, filename: str, source_type: str):
             if not chunks:
                 return
 
-            # 3. Derive document-level metadata
-            source_link = SOURCE_LINKS.get(filename, "")
-            title = extract_title(full_text, file_path)
-            preview = full_text.strip()[:PREVIEW_CHARS]
-
-            # 4. Save processed metadata locally
+            # 3. Save processed metadata locally
             processed_data = {
                 "filename": filename,
                 "source_type": source_type,
-                "source_link": source_link,
-                "title": title,
-                "preview": preview,
                 "chunks": chunks,
             }
             local_path = save_processed_locally(processed_data, source_type, filename)
             logfire.info(f"Saved processed data → {local_path}")
 
-            # 5. Embed and index in Qdrant
+            # 4. Embed and index in Qdrant
             with logfire.span("Vectorizing & Indexing"):
                 embeddings = embed_texts(chunks)
                 points = [
@@ -120,9 +84,6 @@ def process_file(file_path: str, filename: str, source_type: str):
                             "text": chunk,
                             "source": filename,
                             "source_type": source_type,
-                            "source_link": source_link,
-                            "title": title,
-                            "preview": preview,
                         },
                     )
                     for chunk, vector in zip(chunks, embeddings)
