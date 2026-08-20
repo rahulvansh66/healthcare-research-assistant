@@ -4,39 +4,45 @@ An AI-powered research assistant that helps users explore **clinical research li
 
 ## What It Can Do
 
-* Retrieve relevant research articles from PubMed based on the user's query.
-* Answer clinical research questions using information from the retrieved literature.
-* Generate concise summaries of specific research papers.
-* Provide responses grounded in the retrieved scientific literature.
+- Retrieve relevant research articles from PubMed based on the user's query.
+- Answer clinical research questions using information from the retrieved literature.
+- Generate concise summaries of specific research papers.
+- Provide responses grounded in the retrieved scientific literature.
 
 ## Example Queries
 
 **Summarize a specific paper**
 
 > Generate a summary for this paper:
-> https://pubmed.ncbi.nlm.nih.gov/39796530/
+> [https://pubmed.ncbi.nlm.nih.gov/39796530/](https://pubmed.ncbi.nlm.nih.gov/39796530/)
 
 **Ask a research question**
 
 > How does the Tang cell count correlate with COVID-19 disease severity?
 
+
+
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| API & UI | FastAPI, Streamlit |
-| Agent Orchestration | LangChain, LangGraph |
-| Literature Retrieval | Live PubMed (NCBI E-utilities — ESearch + EFetch) |
-| Embeddings | Jina Embeddings API |
-| Session Cache / Vector Search | Qdrant (per-thread PubMed result cache)|
-| Reranker | Jina Reranker API |
-| LLM Gateway | Portkey + Groq |
-| Query Cache | Portkey | 
-| Safety | NVIDIA NeMo Guardrails, regex-based PII filter |
-| Observability | LangSmith, Logfire |
-| Evaluation | RAGAS, DeepEval |
+
+| Layer                         | Technology                                        |
+| ----------------------------- | ------------------------------------------------- |
+| API & UI                      | FastAPI, Streamlit                                |
+| Agent Orchestration           | LangChain, LangGraph                              |
+| Literature Retrieval          | Live PubMed (NCBI E-utilities — ESearch + EFetch) |
+| Embeddings                    | Jina Embeddings API                               |
+| Session Cache / Vector Search | Qdrant (per-thread PubMed result cache)           |
+| Reranker                      | Jina Reranker API                                 |
+| LLM Gateway                   | Portkey + Groq                                    |
+| Query Cache                   | Portkey                                           |
+| Safety                        | NVIDIA NeMo Guardrails, regex-based PII filter    |
+| Observability                 | LangSmith, Logfire                                |
+| Evaluation                    | RAGAS, DeepEval                                   |
+
 
 ---
+
+
 
 ## Agentic AI workflow
 
@@ -67,14 +73,34 @@ graph TD
     Responder -.-> Memory[(LangGraph MemorySaver)]
 ```
 
-Each query first passes a regex-based PII check and the NeMo Guardrails gate (off-topic/jailbreak/self-check) before reaching the LangGraph agent. The `planner` classifies the message as conversational or clinical; for clinical queries the `retriever` runs a live PubMed search (or reuses this thread's cached results) and reranks with the Jina Reranker API — if the top reranked result is below a relevance threshold, it's treated as a **Corrective-RAG (CRAG)** miss: the query is rewritten and the search retried, up to a bounded number of attempts, before falling through to whatever is best-available. The `evidence_agent` then extracts PMID-grounded evidence, and the `responder` generates a citation-backed answer and **self-critiques** it against that evidence — if it finds claims the evidence doesn't support, it deterministically appends a visible "Self-Check Note" caveat rather than silently rewriting the answer.
+
+
+Each query first passes a regex-based PII check and the NeMo Guardrails gate (off-topic/jailbreak/self-check) before reaching the LangGraph agent.
+
+ The `planner` classifies the message as conversational or clinical; for clinical queries the `retriever` runs a live PubMed search (or reuses this thread's cached results) and reranks with the Jina Reranker API, if the top reranked result is below a relevance threshold, it's treated as a **Corrective-RAG (CRAG)** miss: the query is rewritten and the search retried, up to a bounded number of attempts, before falling through to whatever is best-available. 
+
+The `evidence_agent` then extracts PMID-grounded evidence, and the `responder` generates a citation-backed answer and **self-critiques** it against that evidence, if it finds claims the evidence doesn't support, it deterministically appends a visible "Self-Check Note" caveat rather than silently rewriting the answer. 
+
+```
+...normal answer text about the drug's efficacy...
+
+⚠️ Self-Check Note
+The following statement(s) may not be fully supported by the retrieved evidence:
+- Metformin reduces cardiovascular mortality by 30% in non-diabetic patients
+```
+
+This matters in a clinical-research context: a silently corrected or dropped claim would hide the exact statement a user shouldn't act on, whereas a visible caveat lets them judge the flagged claim themselves.  
 
 ## Setup
+
+
 
 ### Prerequisites
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (preferred) — or `pip` with `requirements.txt` as a fallback
+
+
 
 ### Installation
 
@@ -88,13 +114,15 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+
+
 ### Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in `.env` with your own credentials — see the comments in `.env.example` for what each variable is for. `NCBI_CONTACT_EMAIL` is required by NCBI's usage policy; `NCBI_API_KEY` is optional but raises the E-utilities rate limit from 3 req/s to 10 req/s.
+Fill in `.env` with your own credentials — see the comments in `.env.example` for what each variable is for. 
 
 ## Running the App
 
@@ -110,11 +138,13 @@ uv run streamlit run streamlit_app.py
 
 **Backend** — `http://127.0.0.1:8000`
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/` | Health check |
-| `GET` | `/graph` | LangGraph agent diagram |
+
+| Method | Path     | Description                                              |
+| ------ | -------- | -------------------------------------------------------- |
+| `GET`  | `/`      | Health check                                             |
+| `GET`  | `/graph` | LangGraph agent diagram                                  |
 | `POST` | `/query` | Submit a query — body `{"q": "...", "thread_id": "..."}` |
+
 
 **Frontend** — `http://127.0.0.1:8501`
 
@@ -128,9 +158,11 @@ Unit and integration tests live under `tests/` and run via `pytest`.
 uv run pytest
 ```
 
+
+
 ## Running Evals
 
-There is no automated test suite for answer *quality* — correctness of retrieval and generation is checked via the eval suite in `evals/`, which drives the live `/query` endpoint against `evals/golden_dataset.json` and scores with RAGAS/DeepEval. The backend must be running (`uv run uvicorn app.main:app --reload`) before starting the eval UI, and `NCBI_API_KEY` should be set to stay within NCBI's rate limit since each clinical sample makes a real PubMed call.
+Correctness of retrieval and generation is checked via the eval suite in `evals/`, which drives the live `/query` endpoint against `evals/golden_dataset.json` and scores with RAGAS/DeepEval. The backend must be running (`uv run uvicorn app.main:app --reload`) before starting the eval UI.
 
 ```bash
 uv run streamlit run evals/app.py
