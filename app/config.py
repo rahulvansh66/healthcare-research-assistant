@@ -43,6 +43,8 @@ class Settings:
     CHUNK_SIZE = int(_cfg["retrieval"]["chunk_size"])                  # characters per chunk when splitting full-text markdown for embedding
     CHUNK_OVERLAP = int(_cfg["retrieval"]["chunk_overlap"])            # character overlap between consecutive chunks
     SESSION_CACHE_CHUNK_FETCH_MULTIPLIER = int(_cfg["retrieval"]["session_cache_chunk_fetch_multiplier"])  # over-fetch factor (limit * this) for cached chunk queries
+    RERANK_RELEVANCE_THRESHOLD = float(_cfg["retrieval"]["rerank_relevance_threshold"])  # min top Jina rerank score before CRAG rewrites the query and retries
+    CRAG_MAX_RETRIES = int(_cfg["retrieval"]["crag_max_retries"])  # max query-rewrite + re-search attempts in retrieve_node
 
     # --- REASONING ENGINE (GROQ) ---
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")                    # primary Groq account key (secret)

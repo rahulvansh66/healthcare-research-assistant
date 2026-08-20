@@ -1,15 +1,29 @@
+from typing import List
+
 import logfire
 from langgraph.config import get_stream_writer
+from pydantic import BaseModel
 
 from app.agents.history import format_history
 from app.agents.prompts.responder import (
     build_conversational_prompt,
+    build_critique_prompt,
     build_grounded_answer_prompt,
     build_insufficient_evidence_prompt,
 )
 from app.agents.state import AgentState
 from app.config import settings
-from app.gateway import portkey_client, extract_cache_status
+from app.gateway import get_langchain_llm, portkey_client, extract_cache_status
+
+critique_llm = get_langchain_llm(feature="responder_critic")
+
+
+class CritiqueResult(BaseModel):
+    all_claims_supported: bool
+    unsupported_claims: List[str]
+
+
+structured_critique_llm = critique_llm.with_structured_output(CritiqueResult)
 
 
 def _build_citations(evidence: list[dict], documents: list[dict]) -> list[dict]:
@@ -96,6 +110,20 @@ def generate_node(state: AgentState):
                 logfire.info("✅ Response synthesised via LLM.")
                 plan_update = state["plan"]
                 status = "Response generated."
+
+            if evidence:
+                with logfire.span("🧐 Self-Critique"):
+                    critique = structured_critique_llm.invoke(build_critique_prompt(evidence_block, content))
+
+                if not critique.all_claims_supported and critique.unsupported_claims:
+                    caveat_lines = "\n".join(f"- {c}" for c in critique.unsupported_claims)
+                    caveat = f"\n\n### ⚠️ Self-Check Note\nThe following statement(s) may not be fully supported by the retrieved evidence:\n{caveat_lines}"
+                    content += caveat
+                    writer(caveat)
+                    plan_update = plan_update + [f"Self-critique: flagged {len(critique.unsupported_claims)} unsupported claim(s)"]
+                    logfire.warning(f"Self-critique flagged {len(critique.unsupported_claims)} unsupported claim(s).")
+                else:
+                    plan_update = plan_update + ["Self-critique: all claims supported"]
 
             citations = _build_citations(evidence, state.get("documents", [])) if evidence else []
 

@@ -1,6 +1,17 @@
 from app.agents.nodes import retriever
 
 
+class _FakeStructuredLLM:
+    """Stands in for retriever.structured_llm (the CRAG query-rewrite LLM) without
+    making a real network call."""
+
+    def __init__(self, fn):
+        self._fn = fn
+
+    def invoke(self, prompt):
+        return self._fn(prompt)
+
+
 def _config(thread_id="thread-1"):
     return {"configurable": {"thread_id": thread_id}}
 
@@ -26,7 +37,7 @@ def test_first_turn_forces_live_search_and_reranks(monkeypatch, make_pubmed_docu
     ]
     monkeypatch.setattr(retriever, "search_pubmed", lambda *a, **k: {"pmids": ["1", "2"], "total_results": 2})
     monkeypatch.setattr(retriever, "get_pubmed_articles", lambda pmids: articles)
-    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: texts)
+    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: [(t, 0.9) for t in texts])
     monkeypatch.setattr(retriever, "fetch_full_text_sections", lambda pmid: None)
     monkeypatch.setattr(retriever, "query_session_cache", lambda *a, **k: (_ for _ in ()).throw(AssertionError("cache should not be queried on first turn")))
 
@@ -39,13 +50,78 @@ def test_first_turn_forces_live_search_and_reranks(monkeypatch, make_pubmed_docu
 
 
 def test_live_search_with_no_pmids_returns_no_documents(monkeypatch):
+    from app.config import settings
+
     monkeypatch.setattr(retriever, "search_pubmed", lambda *a, **k: {"pmids": [], "total_results": 0})
+    rewrite_calls = []
+    monkeypatch.setattr(
+        retriever,
+        "structured_llm",
+        _FakeStructuredLLM(lambda prompt: rewrite_calls.append(prompt) or retriever.QueryRewrite(rewritten_query="broader query")),
+    )
 
     result = retriever.retrieve_node(_state(), _config())
 
     assert result["documents"] == []
     assert result["retrieval_source"] == "none"
-    assert "PMIDs Found: 0" in result["plan"]
+    assert any("PMIDs Found: 0" in note for note in result["plan"])
+    assert len(rewrite_calls) == settings.CRAG_MAX_RETRIES
+    assert result["retrieval_attempts"] == settings.CRAG_MAX_RETRIES
+
+
+def test_crag_retries_and_rewrites_query_on_low_relevance(monkeypatch, make_pubmed_document):
+    low_doc = make_pubmed_document(pmid="1", title="Low", abstract="low relevance")
+    high_doc = make_pubmed_document(pmid="2", title="High", abstract="high relevance")
+
+    search_calls = []
+
+    def fake_search(query, **kwargs):
+        search_calls.append(query)
+        return {"pmids": ["x"], "total_results": 1}
+
+    def fake_rerank(query, texts, top_n):
+        # First attempt: low relevance. Second attempt (after rewrite): high relevance.
+        score = 0.1 if len(search_calls) == 1 else 0.9
+        doc = low_doc if len(search_calls) == 1 else high_doc
+        return [(f"{doc['title']}\n{doc['abstract']}", score)]
+
+    monkeypatch.setattr(retriever, "search_pubmed", fake_search)
+    monkeypatch.setattr(retriever, "get_pubmed_articles", lambda pmids: [low_doc if len(search_calls) == 1 else high_doc])
+    monkeypatch.setattr(retriever, "rerank_documents", fake_rerank)
+    monkeypatch.setattr(retriever, "fetch_full_text_sections", lambda pmid: None)
+    monkeypatch.setattr(
+        retriever,
+        "structured_llm",
+        _FakeStructuredLLM(lambda prompt: retriever.QueryRewrite(rewritten_query="rewritten query")),
+    )
+
+    result = retriever.retrieve_node(_state(), _config())
+
+    assert search_calls == ["widget therapy", "rewritten query"]
+    assert result["retrieval_attempts"] == 1
+    assert [d["pmid"] for d in result["documents"]] == ["2"]
+    assert any("rewriting query" in note for note in result["plan"])
+
+
+def test_crag_gives_up_after_max_retries(monkeypatch, make_pubmed_document):
+    from app.config import settings
+
+    doc = make_pubmed_document(pmid="1", title="Low", abstract="low relevance")
+
+    monkeypatch.setattr(retriever, "search_pubmed", lambda *a, **k: {"pmids": ["1"], "total_results": 1})
+    monkeypatch.setattr(retriever, "get_pubmed_articles", lambda pmids: [doc])
+    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: [(t, 0.1) for t in texts])
+    monkeypatch.setattr(retriever, "fetch_full_text_sections", lambda pmid: None)
+    monkeypatch.setattr(
+        retriever,
+        "structured_llm",
+        _FakeStructuredLLM(lambda prompt: retriever.QueryRewrite(rewritten_query="still not great")),
+    )
+
+    result = retriever.retrieve_node(_state(), _config())
+
+    assert result["retrieval_attempts"] == settings.CRAG_MAX_RETRIES
+    assert [d["pmid"] for d in result["documents"]] == ["1"]
 
 
 def test_uses_session_cache_when_relevant_and_not_first_turn(monkeypatch, make_pubmed_document):
@@ -78,7 +154,7 @@ def test_falls_through_to_live_search_when_cache_below_threshold(monkeypatch, ma
     monkeypatch.setattr(retriever, "query_session_cache", lambda *a, **k: [low_score_doc])
     monkeypatch.setattr(retriever, "search_pubmed", lambda *a, **k: {"pmids": ["9"], "total_results": 1})
     monkeypatch.setattr(retriever, "get_pubmed_articles", lambda pmids: [live_doc])
-    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: texts)
+    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: [(t, 0.9) for t in texts])
     monkeypatch.setattr(retriever, "fetch_full_text_sections", lambda pmid: None)
 
     result = retriever.retrieve_node(_state(messages=history), _config())
@@ -97,7 +173,7 @@ def test_fresh_search_requested_forces_live_search_even_with_cache_hit(monkeypat
     monkeypatch.setattr(retriever, "query_session_cache", lambda *a, **k: (_ for _ in ()).throw(AssertionError("cache should be skipped")))
     monkeypatch.setattr(retriever, "search_pubmed", lambda *a, **k: {"pmids": ["9"], "total_results": 1})
     monkeypatch.setattr(retriever, "get_pubmed_articles", lambda pmids: [live_doc])
-    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: texts)
+    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: [(t, 0.9) for t in texts])
     monkeypatch.setattr(retriever, "fetch_full_text_sections", lambda pmid: None)
 
     result = retriever.retrieve_node(_state(messages=history, fresh_search_requested=True), _config())
@@ -111,7 +187,7 @@ def test_attaches_full_text_only_up_to_fulltext_top_n(monkeypatch, make_pubmed_d
     articles = [make_pubmed_document(pmid=str(i), title=f"T{i}", abstract=f"a{i}") for i in range(settings.FULLTEXT_TOP_N + 2)]
     monkeypatch.setattr(retriever, "search_pubmed", lambda *a, **k: {"pmids": [d["pmid"] for d in articles], "total_results": len(articles)})
     monkeypatch.setattr(retriever, "get_pubmed_articles", lambda pmids: articles)
-    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: texts[:top_n])
+    monkeypatch.setattr(retriever, "rerank_documents", lambda query, texts, top_n: [(t, 0.9) for t in texts[:top_n]])
     fetched = []
 
     def fake_fetch(pmid):

@@ -1,13 +1,25 @@
 import logfire
 from langchain_core.runnables import RunnableConfig
+from pydantic import BaseModel
 
+from app.agents.prompts.retriever import build_query_rewrite_prompt
 from app.agents.state import AgentState, PubMedDocument
 from app.config import settings
+from app.gateway import get_langchain_llm
 from app.services.retrieval.bioc_service import fetch_full_text_sections
 from app.services.retrieval.markdown_builder import build_full_text_markdown
 from app.services.retrieval.pubmed_service import search_pubmed, get_pubmed_articles
 from app.services.retrieval.qdrant_service import query_session_cache
 from app.services.retrieval.ranking_service import rerank_documents
+
+llm = get_langchain_llm(feature="crag_rewriter")
+
+
+class QueryRewrite(BaseModel):
+    rewritten_query: str
+
+
+structured_llm = llm.with_structured_output(QueryRewrite)
 
 
 def _attach_full_text(ranked: list[PubMedDocument]) -> None:
@@ -26,11 +38,10 @@ def _attach_full_text(ranked: list[PubMedDocument]) -> None:
         doc["full_text_markdown"] = None
 
 
-def _rerank_and_reattach(query: str, articles: list[PubMedDocument], top_n: int) -> list[PubMedDocument]:
+def _rerank_and_reattach(query: str, articles: list[PubMedDocument], top_n: int) -> list[tuple[PubMedDocument, float]]:
     """
-    ranking_service.rerank_documents() returns reranked text only, with no
-    score/id mapping back to the source object. Rerank on "title\\nabstract"
-    strings and re-attach the original PubMedDocument by matching text back
+    Rerank on "title\\nabstract" strings and re-attach the original
+    PubMedDocument to each (text, score) pair by matching text back
     positionally — avoids changing the reranker's public interface.
     """
     if not articles:
@@ -41,8 +52,8 @@ def _rerank_and_reattach(query: str, articles: list[PubMedDocument], top_n: int)
     for text, article in zip(texts, articles):
         by_text.setdefault(text, article)
 
-    reranked_texts = rerank_documents(query, texts, top_n=top_n)
-    return [by_text[t] for t in reranked_texts if t in by_text]
+    reranked = rerank_documents(query, texts, top_n=top_n)
+    return [(by_text[t], score) for t, score in reranked if t in by_text]
 
 
 def retrieve_node(state: AgentState, config: RunnableConfig) -> dict:
@@ -107,42 +118,69 @@ def retrieve_node(state: AgentState, config: RunnableConfig) -> dict:
                 need_live_search = True  # (c)/(d): empty or below relevance threshold
 
         if need_live_search:
-            search_result = search_pubmed(
-                query,
-                max_results=settings.PUBMED_FETCH_LIMIT,
-                date_from=params.get("date_from"),
-                date_to=params.get("date_to"),
-                publication_type=params.get("publication_type"),
-            )
-            pmids = search_result["pmids"]
+            search_query = query
+            attempts = 0
+            ranked: list[tuple[PubMedDocument, float]] = []
+            plan_notes = []
 
-            if not pmids:
-                plan_notes = ["Tool: search_pubmed", "PMIDs Found: 0"]
+            while True:
+                search_result = search_pubmed(
+                    search_query,
+                    max_results=settings.PUBMED_FETCH_LIMIT,
+                    date_from=params.get("date_from"),
+                    date_to=params.get("date_to"),
+                    publication_type=params.get("publication_type"),
+                )
+                pmids = search_result["pmids"]
+
+                if not pmids:
+                    ranked = []
+                    top_score = 0.0
+                    plan_notes.append("Tool: search_pubmed")
+                    plan_notes.append(f"PMIDs Found: 0 (attempt {attempts + 1})")
+                else:
+                    articles = get_pubmed_articles(pmids)
+                    with logfire.span("⚖️ Semantic Reranking"):
+                        ranked = _rerank_and_reattach(search_query, articles, top_n=settings.PUBMED_STORE_TOP_N)
+                    top_score = ranked[0][1] if ranked else 0.0
+                    plan_notes.append("Tool: search_pubmed")
+                    plan_notes.append(f"PMIDs Found: {len(pmids)} (attempt {attempts + 1})")
+                    plan_notes.append(f"Top Relevance: {top_score:.2f}")
+
+                if top_score >= settings.RERANK_RELEVANCE_THRESHOLD or attempts >= settings.CRAG_MAX_RETRIES:
+                    break
+
+                attempts += 1
+                with logfire.span("✏️ CRAG Query Rewrite"):
+                    rewrite = structured_llm.invoke(build_query_rewrite_prompt(query, search_query, attempts))
+                search_query = rewrite.rewritten_query
+                plan_notes.append(
+                    f"CRAG: relevance {top_score:.2f} < {settings.RERANK_RELEVANCE_THRESHOLD} — "
+                    f"rewriting query to \"{search_query}\""
+                )
+
+            ranked_docs = [d for d, _ in ranked]
+
+            if not ranked_docs:
+                plan_notes.append("Tool: get_pubmed_articles")
             else:
-                articles = get_pubmed_articles(pmids)
-                with logfire.span("⚖️ Semantic Reranking"):
-                    ranked = _rerank_and_reattach(query, articles, top_n=settings.PUBMED_STORE_TOP_N)
-
                 with logfire.span("📄 Full Text Fetch"):
-                    _attach_full_text(ranked)
+                    _attach_full_text(ranked_docs)
 
-                documents = ranked[: settings.EVIDENCE_TOP_N]
+                documents = ranked_docs[: settings.EVIDENCE_TOP_N]
                 retrieval_source = "live_pubmed"
-                background_payload = ranked
+                background_payload = ranked_docs
                 full_text_count = sum(1 for d in documents if d["has_full_text"])
-                plan_notes = [
-                    "Tool: search_pubmed",
-                    f"PMIDs Found: {len(pmids)}",
-                    "Tool: get_pubmed_articles",
-                    f"Reranked: top {len(documents)} of {len(ranked)} stored",
-                    f"Full Text: {full_text_count}/{len(documents)}",
-                ]
+                plan_notes.append("Tool: get_pubmed_articles")
+                plan_notes.append(f"Reranked: top {len(documents)} of {len(ranked_docs)} stored")
+                plan_notes.append(f"Full Text: {full_text_count}/{len(documents)}")
 
     status = "Found supporting literature." if documents else "No PubMed results found for this query."
 
     return {
         "documents": documents,
         "retrieval_source": retrieval_source,
+        "retrieval_attempts": attempts if need_live_search and not direct_pmid else 0,
         "_background_store_payload": background_payload,
         "status": status,
         "plan": state["plan"] + plan_notes,

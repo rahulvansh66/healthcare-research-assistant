@@ -24,6 +24,8 @@ retrieval:
   chunk_size: 600                       # characters per chunk when splitting full-text markdown for embedding/storage
   chunk_overlap: 200                    # character overlap between consecutive chunks
   session_cache_chunk_fetch_multiplier: 4  # over-fetch factor (limit * this) when querying cached chunks, to compensate for multiple chunks per document
+  rerank_relevance_threshold: 0.4       # min top Jina rerank (cross-encoder) score for a live search to be accepted; below this, CRAG rewrites the query and retries. Distinct score space from session_cache_relevance_threshold (embedding cosine similarity)
+  crag_max_retries: 2                   # max query-rewrite + re-search attempts in retrieve_node when reranked relevance stays below rerank_relevance_threshold
 
 jina:
   embeddings_url: https://api.jina.ai/v1/embeddings  # Jina embeddings API endpoint used to embed abstracts/chunks for the session cache

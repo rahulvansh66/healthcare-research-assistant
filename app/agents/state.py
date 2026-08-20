@@ -47,6 +47,7 @@ class AgentState(TypedDict):
     fresh_search_requested: bool  # planner-detected dissatisfaction ("retry"/"search more")
     direct_pmid: Optional[str]  # set by planner when a PMID/URL was explicitly detected; None otherwise
     retrieval_source: str  # "live_pubmed" | "session_cache" | "none"
+    retrieval_attempts: int  # number of CRAG query-rewrite retries used during live search this turn
     documents: List[PubMedDocument]
     evidence: List[Evidence]
     citations: List[Citation]

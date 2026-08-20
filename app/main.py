@@ -78,6 +78,7 @@ def _build_initial_state(q: str, body: QueryRequest) -> dict:
         "fresh_search_requested": False,
         "direct_pmid": None,
         "retrieval_source": "none",
+        "retrieval_attempts": 0,
         "documents": [],
         "evidence": [],
         "citations": [],

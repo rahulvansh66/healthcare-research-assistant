@@ -1,10 +1,24 @@
 # Clinical Research Assistant
 
-- Engineered AI Assistant that can answer user query related to Clinical Research, it retrive relvent articls from PubMed and answer to user. 
-- User can ask queries like:
-  - *Generate summary for this [https://pubmed.ncbi.nlm.nih.gov/39796530/](https://pubmed.ncbi.nlm.nih.gov/39796530/) paper*
-  - *How does the Tang cell count correlate with COVID-19 disease severity?*
+An AI-powered research assistant that helps users explore **clinical research literature** by retrieving relevant articles from **PubMed** and generating evidence-grounded answers to research questions.
 
+## What It Can Do
+
+* Retrieve relevant research articles from PubMed based on the user's query.
+* Answer clinical research questions using information from the retrieved literature.
+* Generate concise summaries of specific research papers.
+* Provide responses grounded in the retrieved scientific literature.
+
+## Example Queries
+
+**Summarize a specific paper**
+
+> Generate a summary for this paper:
+> https://pubmed.ncbi.nlm.nih.gov/39796530/
+
+**Ask a research question**
+
+> How does the Tang cell count correlate with COVID-19 disease severity?
 
 ## Tech Stack
 
@@ -13,9 +27,11 @@
 | API & UI | FastAPI, Streamlit |
 | Agent Orchestration | LangChain, LangGraph |
 | Literature Retrieval | Live PubMed (NCBI E-utilities — ESearch + EFetch) |
-| Embeddings | BiomedBERT (local, biomedical-domain) |
-| Session Cache / Vector Search | Qdrant (per-thread PubMed result cache), FlashRank reranking |
+| Embeddings | Jina Embeddings API |
+| Session Cache / Vector Search | Qdrant (per-thread PubMed result cache)|
+| Reranker | Jina Reranker API |
 | LLM Gateway | Portkey + Groq |
+| Query Cache | Portkey | 
 | Safety | NVIDIA NeMo Guardrails, regex-based PII filter |
 | Observability | LangSmith, Logfire |
 | Evaluation | RAGAS, DeepEval |
@@ -37,16 +53,21 @@ graph TD
     Planner -->|Clinical| Retriever[Retriever Node]
     Retriever -->|Fresh search| PubMed[(Live PubMed\nESearch + EFetch)]
     Retriever -->|Cached| SessionCache[(Qdrant Session Cache)]
-    PubMed --> Reranker[FlashRank Local Reranker]
-    Reranker --> SessionCache
+    PubMed --> Reranker[Jina Reranker API]
+    Reranker -->|Relevant| SessionCache
+    Reranker -->|Below threshold, retries left| Rewrite[CRAG Query Rewrite]
+    Rewrite --> PubMed
     Reranker --> Evidence[Evidence Agent]
     SessionCache --> Evidence
     Evidence --> Responder
-    Responder --> Response
+    Responder --> Critique{Self-Critique}
+    Critique -->|Unsupported claims| Caveat[Append Self-Check Note]
+    Critique -->|Supported| Response
+    Caveat --> Response
     Responder -.-> Memory[(LangGraph MemorySaver)]
 ```
 
-Each query first passes a regex-based PII check and the NeMo Guardrails gate (off-topic/jailbreak/self-check) before reaching the LangGraph agent. The `planner` classifies the message as conversational or clinical; for clinical queries the `retriever` runs a live PubMed search (or reuses this thread's cached results), reranks with FlashRank, and the `evidence_agent` extracts PMID-grounded evidence before the `responder` generates the final, citation-backed answer.
+Each query first passes a regex-based PII check and the NeMo Guardrails gate (off-topic/jailbreak/self-check) before reaching the LangGraph agent. The `planner` classifies the message as conversational or clinical; for clinical queries the `retriever` runs a live PubMed search (or reuses this thread's cached results) and reranks with the Jina Reranker API — if the top reranked result is below a relevance threshold, it's treated as a **Corrective-RAG (CRAG)** miss: the query is rewritten and the search retried, up to a bounded number of attempts, before falling through to whatever is best-available. The `evidence_agent` then extracts PMID-grounded evidence, and the `responder` generates a citation-backed answer and **self-critiques** it against that evidence — if it finds claims the evidence doesn't support, it deterministically appends a visible "Self-Check Note" caveat rather than silently rewriting the answer.
 
 ## Setup
 

@@ -6,10 +6,11 @@ import requests
 from app.config import settings
 
 
-def rerank_documents(query: str, documents: list[str], top_n: int = None) -> list[str]:
+def rerank_documents(query: str, documents: list[str], top_n: int = None) -> list[tuple[str, float]]:
     """
     Refines retrieval results by re-scoring documents against the query semantically,
-    via Jina's hosted reranker API.
+    via Jina's hosted reranker API. Returns (document, relevance_score) pairs, reordered
+    by descending relevance, so callers can threshold on how relevant the top result is.
     """
     if not documents:
         return []
@@ -38,7 +39,7 @@ def rerank_documents(query: str, documents: list[str], top_n: int = None) -> lis
         response.raise_for_status()
         results = response.json()["results"]
 
-        reranked_docs = [documents[res["index"]] for res in results]
+        reranked_docs = [(documents[res["index"]], res["relevance_score"]) for res in results]
 
         duration = time.time() - start_time
         top_score = results[0]["relevance_score"] if results else "N/A"
@@ -49,4 +50,4 @@ def rerank_documents(query: str, documents: list[str], top_n: int = None) -> lis
     except Exception as e:
         logfire.error(f"❌ [Reranker] Jina reranking failed: {e}")
         # Fallback to the original order to ensure the user still gets an answer
-        return documents[:top_n]
+        return [(d, 0.0) for d in documents[:top_n]]

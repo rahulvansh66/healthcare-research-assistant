@@ -28,7 +28,7 @@ def test_reorders_documents_by_reranker_response(mock_post):
 
     result = ranking_service.rerank_documents("query", docs, top_n=2)
 
-    assert result == ["doc C", "doc A"]
+    assert result == [("doc C", 0.9), ("doc A", 0.5)]
 
 
 @patch("app.services.retrieval.ranking_service.requests.post")
@@ -49,7 +49,7 @@ def test_falls_back_to_original_order_on_request_failure(mock_post):
 
     result = ranking_service.rerank_documents("query", ["a", "b", "c"], top_n=2)
 
-    assert result == ["a", "b"]
+    assert result == [("a", 0.0), ("b", 0.0)]
 
 
 @patch("app.services.retrieval.ranking_service.requests.post")
@@ -60,4 +60,4 @@ def test_falls_back_to_original_order_on_http_error(mock_post):
 
     result = ranking_service.rerank_documents("query", ["a", "b", "c"])
 
-    assert result == ["a", "b", "c"]
+    assert result == [("a", 0.0), ("b", 0.0), ("c", 0.0)]
