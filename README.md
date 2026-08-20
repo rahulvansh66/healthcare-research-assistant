@@ -1,7 +1,10 @@
 # Clinical Research Assistant
 
-* Engineered agentic workflow with LLM routing and query caching using Portkey, NeMo Guardrails, and Qdrant vector store.
-* Integrated MCP-based PubMed retrieval, RAGAS/DeepEval evaluation, and LangSmith/Logfire monitoring.
+- Engineered AI Assistant that can answer user query related to Clinical Research, it retrive relvent articls from PubMed and answer to user. 
+- User can ask queries like:
+  - *Generate summary for this [https://pubmed.ncbi.nlm.nih.gov/39796530/](https://pubmed.ncbi.nlm.nih.gov/39796530/) paper*
+  - *How does the Tang cell count correlate with COVID-19 disease severity?*
+
 
 ## Tech Stack
 
@@ -9,32 +12,41 @@
 |---|---|
 | API & UI | FastAPI, Streamlit |
 | Agent Orchestration | LangChain, LangGraph |
+| Literature Retrieval | Live PubMed (NCBI E-utilities — ESearch + EFetch) |
 | Embeddings | BiomedBERT (local, biomedical-domain) |
-| Vector Search | Qdrant, FlashRank reranking |
+| Session Cache / Vector Search | Qdrant (per-thread PubMed result cache), FlashRank reranking |
 | LLM Gateway | Portkey + Groq |
-| Safety | NVIDIA NeMo Guardrails |
+| Safety | NVIDIA NeMo Guardrails, regex-based PII filter |
 | Observability | LangSmith, Logfire |
 | Evaluation | RAGAS, DeepEval |
-| Document Ingestion | PDF / HTML / Office parsing pipeline |
 
 ---
 
-## Agent Intelligence Flow
+## Agentic AI workflow
 
 ```mermaid
 graph TD
     User((User)) --> UI[Streamlit UI]
     UI --> API[FastAPI /query]
-    API --> Guard{NeMo Guardrails}
-    Guard -->|Blocked| Response[Response to User]
+    API --> PII{PII Check}
+    PII -->|Blocked| Response[Response to User]
+    PII -->|Pass| Guard{NeMo Guardrails}
+    Guard -->|Blocked| Response
     Guard -->|Pass| Planner{Planner Node}
     Planner -->|Conversational| Responder[Responder Node]
-    Planner -->|Clinical Research| Retriever[Retriever Node]
-    Retriever --> Reranker[FlashRank Local Reranker]
-    Reranker --> Responder
+    Planner -->|Clinical| Retriever[Retriever Node]
+    Retriever -->|Fresh search| PubMed[(Live PubMed\nESearch + EFetch)]
+    Retriever -->|Cached| SessionCache[(Qdrant Session Cache)]
+    PubMed --> Reranker[FlashRank Local Reranker]
+    Reranker --> SessionCache
+    Reranker --> Evidence[Evidence Agent]
+    SessionCache --> Evidence
+    Evidence --> Responder
     Responder --> Response
     Responder -.-> Memory[(LangGraph MemorySaver)]
 ```
+
+Each query first passes a regex-based PII check and the NeMo Guardrails gate (off-topic/jailbreak/self-check) before reaching the LangGraph agent. The `planner` classifies the message as conversational or clinical; for clinical queries the `retriever` runs a live PubMed search (or reuses this thread's cached results), reranks with FlashRank, and the `evidence_agent` extracts PMID-grounded evidence before the `responder` generates the final, citation-backed answer.
 
 ## Setup
 
@@ -61,25 +73,11 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill in `.env` with your own credentials — see the comments in `.env.example` for what each variable is for.
+Fill in `.env` with your own credentials — see the comments in `.env.example` for what each variable is for. `NCBI_CONTACT_EMAIL` is required by NCBI's usage policy; `NCBI_API_KEY` is optional but raises the E-utilities rate limit from 3 req/s to 10 req/s.
 
-## Ingestion
+## Running the App
 
-Parses documents from `DATA/`, chunks them (`app/ingestion/chunking/splitter.py`), embeds locally with `NeuML/biomedbert-small-embeddings`, and indexes them into the Qdrant collection.
-
-```bash
-# Ingest everything under DATA/, wiping and recreating the collection first
-uv run python -m app.ingestion.processor DATA --wipe
-
-# Ingest a single source folder without wiping (source type inferred from folder name)
-uv run python -m app.ingestion.processor DATA/true_data true
-```
-
-Parsed chunks + metadata are also saved locally to `processed_data/<source_type>/<filename>.json` for inspection.
-
-## Retrieval Pipeline (API + UI)
-
-Ingestion must have completed at least once (a populated Qdrant collection) before querying.
+There is no ingestion step — retrieval is live against PubMed at query time.
 
 ```bash
 # 1. Start the FastAPI backend
@@ -101,4 +99,20 @@ uv run streamlit run streamlit_app.py
 
 Chat UI that calls the backend at `BACKEND_URL`, with per-conversation memory via `thread_id` and expandable sources/thought-process panels per answer.
 
-Each query flows through NeMo Guardrails first (blocks off-topic/jailbreak input before it reaches the agent), then the LangGraph agent (`app/agents/graph.py`): a planner decides whether the message is conversational or needs retrieval, an optional retriever queries Qdrant and reranks with FlashRank, and a responder generates the grounded answer via the Portkey-routed Groq model.
+## Running Tests
+
+Unit and integration tests live under `tests/` and run via `pytest`.
+
+```bash
+uv run pytest
+```
+
+## Running Evals
+
+There is no automated test suite for answer *quality* — correctness of retrieval and generation is checked via the eval suite in `evals/`, which drives the live `/query` endpoint against `evals/golden_dataset.json` and scores with RAGAS/DeepEval. The backend must be running (`uv run uvicorn app.main:app --reload`) before starting the eval UI, and `NCBI_API_KEY` should be set to stay within NCBI's rate limit since each clinical sample makes a real PubMed call.
+
+```bash
+uv run streamlit run evals/app.py
+```
+
+Guardrails behavior (the input gate, independent of retrieval/generation quality) is scored separately via `evals/guardrails_eval.py`.

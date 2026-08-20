@@ -16,6 +16,8 @@ class PubMedDocument(TypedDict):
     year: Optional[str]
     pub_types: List[str]
     authors: List[str]
+    has_full_text: bool
+    full_text_markdown: Optional[str]
 
 
 class Evidence(TypedDict):
@@ -43,6 +45,7 @@ class AgentState(TypedDict):
     search_params: Optional[PubMedSearchParams]
     pubmed_search_requested: bool  # UI "PubMed Search" toggle for this turn
     fresh_search_requested: bool  # planner-detected dissatisfaction ("retry"/"search more")
+    direct_pmid: Optional[str]  # set by planner when a PMID/URL was explicitly detected; None otherwise
     retrieval_source: str  # "live_pubmed" | "session_cache" | "none"
     documents: List[PubMedDocument]
     evidence: List[Evidence]

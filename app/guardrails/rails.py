@@ -4,6 +4,7 @@ from nemoguardrails import RailsConfig, LLMRails
 
 from app.config import settings
 from app.guardrails.colang_rules import COLANG_CONTENT, YAML_CONTENT, RAIL_INDICATORS
+from app.guardrails.pii import contains_pii, PII_REFUSAL_MESSAGE
 
 
 _rails: LLMRails | None = None
@@ -19,7 +20,7 @@ def initialize_rails() -> None:
 
     guard_llm = ChatGroq(
         api_key=settings.GROQ_API_KEY,
-        model="allam-2-7b",
+        model=settings.GUARDRAILS_INTENT_MODEL,
         temperature=0
     )
 
@@ -29,7 +30,7 @@ def initialize_rails() -> None:
     )
 
     _rails = LLMRails(config, llm=guard_llm)
-    logfire.info("🛡️ NeMo Guardrails initialised (allam-2-7b).")
+    logfire.info(f"🛡️ NeMo Guardrails initialised ({settings.GUARDRAILS_INTENT_MODEL}).")
     
     
 
@@ -43,6 +44,10 @@ def guard(message: str) -> tuple[bool, str | None]:
                                 skip the RAG pipeline entirely.
         (False, None)          — message is clean; proceed to LangGraph.
     """
+    if contains_pii(message):
+        logfire.info(f"🛡️ PII detected in input | query='{message[:80]}'")
+        return True, PII_REFUSAL_MESSAGE
+
     if _rails is None:
         logfire.warning("⚠️ Guardrails not initialised — skipping gate.")
         return False, None

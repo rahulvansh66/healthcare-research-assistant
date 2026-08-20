@@ -16,8 +16,12 @@ _lock = threading.Lock()
 
 
 def _throttle():
-    """NCBI rate limits: 3 req/s without an API key, 10 req/s with one."""
-    min_interval = 1.0 / 10 if settings.NCBI_API_KEY else 1.0 / 3
+    """NCBI rate limits: lower req/s without an API key, higher req/s with one."""
+    min_interval = (
+        1.0 / settings.NCBI_RATE_LIMIT_WITH_KEY
+        if settings.NCBI_API_KEY
+        else 1.0 / settings.NCBI_RATE_LIMIT_WITHOUT_KEY
+    )
     global _last_call_ts
     with _lock:
         elapsed = time.monotonic() - _last_call_ts
@@ -139,6 +143,8 @@ def _parse_article(article_elem: ET.Element) -> PubMedDocument | None:
             year=year or None,
             pub_types=pub_types,
             authors=authors,
+            has_full_text=False,
+            full_text_markdown=None,
         )
     except Exception as e:
         logfire.warning(f"Failed to parse a PubMed article record: {e}")

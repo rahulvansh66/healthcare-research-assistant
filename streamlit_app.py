@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 
@@ -29,6 +30,21 @@ with st.sidebar:
         st.rerun()
     st.divider()
     st.caption(f"Backend: {BACKEND_URL}")
+
+def _stream_tokens(response, result_holder):
+    """Yields answer text chunks for st.write_stream; stashes the trailing
+    'done'/'error' NDJSON line in result_holder since write_stream only wants strings."""
+    for line in response.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        event = json.loads(line)
+        if event["type"] == "token":
+            yield event["content"]
+        elif event["type"] == "done":
+            result_holder["done"] = event
+        elif event["type"] == "error":
+            result_holder["error"] = event["message"]
+
 
 def _render_citations(citations):
     with st.expander(f"Citations ({len(citations)})"):
@@ -62,34 +78,40 @@ if question := st.chat_input("Ask about clinical guidelines, e.g. WHO hypertensi
         st.markdown(question)
 
     with st.chat_message("assistant"):
-        with st.spinner("Researching…"):
-            try:
-                response = requests.post(
-                    f"{BACKEND_URL}/query",
-                    json={
-                        "q": question,
-                        "thread_id": st.session_state.thread_id,
-                        "pubmed_search_requested": pubmed_search,
-                    },
-                    timeout=60,
-                )
-                response.raise_for_status()
-                data = response.json()
-            except requests.RequestException as e:
-                st.error(f"Could not reach the backend at {BACKEND_URL}: {e}")
-                st.stop()
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/query/stream",
+                json={
+                    "q": question,
+                    "thread_id": st.session_state.thread_id,
+                    "pubmed_search_requested": pubmed_search,
+                },
+                timeout=60,
+                stream=True,
+            )
+            response.raise_for_status()
+        except requests.RequestException as e:
+            st.error(f"Could not reach the backend at {BACKEND_URL}: {e}")
+            st.stop()
 
-        answer = data.get("answer", "Sorry, I couldn't generate a response.")
-        citations = data.get("citations") or []
-        thought_process = data.get("thought_process") or []
+        result_holder = {}
+        answer = st.write_stream(_stream_tokens(response, result_holder))
 
-        st.markdown(answer)
-        if citations:
-            _render_citations(citations)
-        if thought_process:
-            with st.expander("Thought process"):
-                for step in thought_process:
-                    st.markdown(f"- {step}")
+        if result_holder.get("error"):
+            answer = result_holder["error"]
+            st.markdown(answer)
+            citations = []
+            thought_process = []
+        else:
+            done = result_holder.get("done", {})
+            citations = done.get("citations") or []
+            thought_process = done.get("thought_process") or []
+            if citations:
+                _render_citations(citations)
+            if thought_process:
+                with st.expander("Thought process"):
+                    for step in thought_process:
+                        st.markdown(f"- {step}")
 
     st.session_state.history.append({
         "role": "assistant",

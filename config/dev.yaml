@@ -1,0 +1,65 @@
+# Centralized non-secret configuration for the dev environment.
+# Secrets (API keys, contact email, etc.) stay in .env only — never here.
+# Loaded by app/config.py; select a different file via APP_ENV (config/{APP_ENV}.yaml).
+
+qdrant:
+  collection: pubmed_session_cache  # Qdrant collection name for the per-thread PubMed result cache (payload-filtered by thread_id)
+
+ncbi:
+  tool_name: medico-healthcare-research-assistant  # sent as the E-utilities `tool` param, per NCBI usage policy
+  eutils_base_url: https://eutils.ncbi.nlm.nih.gov/entrez/eutils  # ESearch/EFetch base URL for live PubMed search
+  bioc_base_url: https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/pmcoa.cgi  # BioC-PMC endpoint for fetching open-access full text
+  request_timeout: 15        # seconds — HTTP timeout for NCBI E-utilities/BioC requests
+  rate_limit_with_key: 10    # req/s — NCBI limit when NCBI_API_KEY is set
+  rate_limit_without_key: 3  # req/s — NCBI limit with no API key
+
+retrieval:
+  pubmed_fetch_limit: 20               # max articles fetched per live ESearch/EFetch call
+  pubmed_store_top_n: 10                # top-N reranked articles kept in the session cache after a live search
+  evidence_top_n: 5                     # top-N reranked documents passed to the evidence_agent for this turn
+  session_cache_query_limit: 10         # max results fetched when querying the thread's session cache
+  session_cache_relevance_threshold: 0.35  # min top score for cached results to be reused instead of triggering a fresh live search
+  fulltext_top_n: 5                     # of the ranked docs, how many get open-access full-text (BioC-PMC) fetched vs. abstract-only
+  fulltext_evidence_char_limit: 6000    # max characters of full-text markdown included per document in the evidence_agent prompt
+  chunk_size: 600                       # characters per chunk when splitting full-text markdown for embedding/storage
+  chunk_overlap: 200                    # character overlap between consecutive chunks
+  session_cache_chunk_fetch_multiplier: 4  # over-fetch factor (limit * this) when querying cached chunks, to compensate for multiple chunks per document
+
+jina:
+  embeddings_url: https://api.jina.ai/v1/embeddings  # Jina embeddings API endpoint used to embed abstracts/chunks for the session cache
+  embeddings_model: jina-embeddings-v3   # embedding model name sent to Jina
+  embedding_dim: 1024                    # vector dimension of the embedding model; must match the Qdrant collection's vector size
+  embedding_batch_size: 128              # number of texts embedded per Jina API call
+  rerank_url: https://api.jina.ai/v1/rerank  # Jina rerank API endpoint used to locally rerank retrieved PubMed results
+  rerank_model: jina-reranker-v3         # rerank model name sent to Jina
+  request_timeout: 90                    # seconds — HTTP timeout for Jina embeddings/rerank requests
+
+groq:
+  model: openai/gpt-oss-20b              # main reasoning model id used by planner/evidence/responder nodes via the Portkey gateway
+  primary_virtual_key: rv66-groq-healthcare-agent          # Portkey virtual key routed to first (primary Groq account/key)
+  fallback_virtual_key: rv-dau-new-groq-healthcare-agent   # Portkey virtual key Portkey falls back to if the primary fails
+
+portkey:
+  config_id: portkey_config     # saved server-side Portkey Config id/slug (this org has block_inline_config on, so strategy/fallback/cache/retry live here, not in code)
+  gateway_temperature: 0        # sampling temperature sent to the gateway for planner/evidence-agent structured-output calls
+  metadata_environment: production  # `environment` metadata tag attached to Portkey requests, for filtering in the Portkey dashboard
+  request_timeout: 30           # seconds — client-side HTTP timeout for LLM calls through the gateway (covers Portkey's internal retries + fallback)
+
+guardrails:
+  intent_model: allam-2-7b   # small/fast Groq model used only for the NeMo Guardrails intent-classification gate (distinct from the main RAG model)
+
+responder:
+  temperature: 0.1   # sampling temperature for the responder node's final answer generation
+
+langsmith:
+  tracing_enabled: true                       # enables LangSmith tracing for the LangGraph agent (default; overridable via LANGSMITH_TRACING env var)
+  project: rag_scale_test                     # LangSmith project name traces are grouped under
+  endpoint: https://api.smith.langchain.com   # LangSmith ingestion endpoint
+
+input_validation:
+  max_query_chars: 2000       # max chars accepted for `q` in POST /query
+  max_thread_id_chars: 128    # max chars accepted for thread_id
+  max_history_chars: 8000     # char budget for conversation history inlined into planner/responder prompts
+
+rate_limit:
+  query: "20/minute"   # slowapi limit for POST /query, keyed by client IP

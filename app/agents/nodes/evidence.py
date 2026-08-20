@@ -3,7 +3,9 @@ from typing import List, Literal
 import logfire
 from pydantic import BaseModel
 
+from app.agents.prompts.evidence import build_evidence_prompt
 from app.agents.state import AgentState
+from app.config import settings
 from app.gateway import get_langchain_llm
 
 llm = get_langchain_llm(feature="evidence_agent")
@@ -42,33 +44,26 @@ def evidence_agent_node(state: AgentState) -> dict:
 
     user_message = state["messages"][-1]["content"] if state["messages"] else state["current_query"]
 
-    docs_block = "\n\n".join(
-        f"PMID: {d['pmid']}\nTITLE: {d['title']}\nSTUDY TYPES: {', '.join(d['pub_types']) or 'Unknown'}\n"
-        f"ABSTRACT: {d['abstract']}"
-        for d in documents
-    )
+    # Cap how many documents' full text get inlined, regardless of how many
+    # total documents are in play (a session-cache hit can carry more
+    # documents than a live search does) — keeps the prompt/JSON-mode
+    # generation bounded the same way on both retrieval paths.
+    full_text_budget = settings.FULLTEXT_TOP_N
 
-    prompt = f"""
-    You are Medico's Evidence Agent. Extract structured evidence records STRICTLY from
-    the PubMed abstracts below to help answer the user's question. Rules:
-    - Only use the PMIDs and text given below — never invent a PMID or a claim not
-      present in the supplied abstracts.
-    - Distinguish study type where possible (e.g. Randomized Controlled Trial,
-      Meta-Analysis, Observational, Systematic Review) using STUDY TYPES and the
-      abstract's own description of its methodology.
-    - Set confidence based on study type and how directly the abstract supports the claim
-      (RCT/meta-analysis + direct match = high; observational or partial match = moderate;
-      weak/indirect support = low).
-    - One or more evidence records per document as warranted by distinct claims.
-    - Set insufficient_evidence=true (and return an empty records list) if none of the
-      abstracts actually answer the user's question.
+    def _doc_block(d: dict) -> str:
+        nonlocal full_text_budget
+        block = (
+            f"PMID: {d['pmid']}\nTITLE: {d['title']}\nSTUDY TYPES: {', '.join(d['pub_types']) or 'Unknown'}\n"
+            f"ABSTRACT: {d['abstract']}"
+        )
+        if d.get("full_text_markdown") and full_text_budget > 0:
+            block += f"\nFULL TEXT: {d['full_text_markdown'][:settings.FULLTEXT_EVIDENCE_CHAR_LIMIT]}"
+            full_text_budget -= 1
+        return block
 
-    USER QUESTION:
-    "{user_message}"
+    docs_block = "\n\n".join(_doc_block(d) for d in documents)
 
-    RETRIEVED ABSTRACTS:
-    {docs_block}
-    """
+    prompt = build_evidence_prompt(user_message, docs_block)
 
     with logfire.span("🧪 Evidence Extraction"):
         result = structured_llm.invoke(prompt)
