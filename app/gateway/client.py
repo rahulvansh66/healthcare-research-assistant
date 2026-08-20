@@ -14,7 +14,11 @@ from app.config import settings
 
 portkey_client = Portkey(
     api_key=settings.PORTKEY_API_KEY,
-    config=settings.PORTKEY_CONFIG
+    config=settings.PORTKEY_CONFIG,
+    # The native Portkey SDK sends this as the x-portkey-request-timeout header,
+    # which the gateway reads in milliseconds — unlike ChatOpenAI's `timeout=`
+    # below, which is seconds. Convert so both share one seconds-based setting.
+    request_timeout=settings.PORTKEY_REQUEST_TIMEOUT * 1000
 )
 
 
@@ -32,15 +36,16 @@ def get_langchain_llm(feature: str = "rag") -> ChatOpenAI:
     return ChatOpenAI(
         api_key=settings.PORTKEY_API_KEY,
         base_url=PORTKEY_GATEWAY_URL,
-        model=f"@{settings.GROQ_SLUG}/openai/gpt-oss-20b",
-        temperature=0,
+        model=f"@{settings.GROQ_SLUG}/{settings.GROQ_MODEL}",
+        temperature=settings.PORTKEY_GATEWAY_TEMPERATURE,
+        timeout=settings.PORTKEY_REQUEST_TIMEOUT,
         default_headers=createHeaders(
             api_key=settings.PORTKEY_API_KEY,
             config=settings.PORTKEY_CONFIG,
             metadata={
                 "feature": feature,
                 "_user": "rag-system",
-                "environment": "production"
+                "environment": settings.PORTKEY_METADATA_ENVIRONMENT
             }
         )
     )

@@ -16,7 +16,6 @@ from openai import AsyncOpenAI
 
 from ragas.llms import llm_factory
 from ragas.embeddings import HuggingFaceEmbeddings
-from ragas import SingleTurnSample
 from ragas.metrics.collections import (
     Faithfulness,
     AnswerRelevancy,
@@ -26,7 +25,7 @@ from ragas.metrics.collections import (
 )
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-JUDGE_MODEL = "llama-3.1-8b-instant"
+JUDGE_MODEL = "openai/gpt-oss-20b"
 COOLDOWN_STANDARD = 62
 COOLDOWN_MINI = 40       # between individual samples — lets sliding TPM window recover (~2,800 tok/sample)
 GENERAL_BATCH_SIZE = 1  # one sample at a time: abatch_score fires calls concurrently per sample,

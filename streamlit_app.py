@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 
@@ -30,17 +31,46 @@ with st.sidebar:
     st.divider()
     st.caption(f"Backend: {BACKEND_URL}")
 
+def _stream_tokens(response, result_holder):
+    """Yields answer text chunks for st.write_stream; stashes the trailing
+    'done'/'error' NDJSON line in result_holder since write_stream only wants strings."""
+    for line in response.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        event = json.loads(line)
+        if event["type"] == "token":
+            yield event["content"]
+        elif event["type"] == "done":
+            result_holder["done"] = event
+        elif event["type"] == "error":
+            result_holder["error"] = event["message"]
+
+
+def _render_citations(citations):
+    with st.expander(f"Citations ({len(citations)})"):
+        for i, c in enumerate(citations, start=1):
+            year = f" ({c['year']})" if c.get("year") else ""
+            st.markdown(
+                f"**{i}.** [{c.get('title', 'Untitled')}]({c.get('url', '#')}) — "
+                f"{c.get('journal', '')}{year} · {c.get('study_type', 'Unknown')} · PMID: {c.get('pmid', '')}"
+            )
+
+
 for turn in st.session_state.history:
     with st.chat_message(turn["role"]):
         st.markdown(turn["content"])
-        if turn.get("sources"):
-            with st.expander(f"Sources ({len(turn['sources'])})"):
-                for i, doc in enumerate(turn["sources"], start=1):
-                    st.markdown(f"**{i}.** {doc[:500]}{'…' if len(doc) > 500 else ''}")
+        if turn.get("citations"):
+            _render_citations(turn["citations"])
         if turn.get("thought_process"):
             with st.expander("Thought process"):
                 for step in turn["thought_process"]:
                     st.markdown(f"- {step}")
+
+pubmed_search = st.toggle(
+    "PubMed Search",
+    key="pubmed_search_toggle",
+    help="Force a fresh PubMed search instead of reusing this conversation's cached results.",
+)
 
 if question := st.chat_input("Ask about clinical guidelines, e.g. WHO hypertension management…"):
     st.session_state.history.append({"role": "user", "content": question})
@@ -48,36 +78,44 @@ if question := st.chat_input("Ask about clinical guidelines, e.g. WHO hypertensi
         st.markdown(question)
 
     with st.chat_message("assistant"):
-        with st.spinner("Researching…"):
-            try:
-                response = requests.post(
-                    f"{BACKEND_URL}/query",
-                    json={"q": question, "thread_id": st.session_state.thread_id},
-                    timeout=60,
-                )
-                response.raise_for_status()
-                data = response.json()
-            except requests.RequestException as e:
-                st.error(f"Could not reach the backend at {BACKEND_URL}: {e}")
-                st.stop()
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/query/stream",
+                json={
+                    "q": question,
+                    "thread_id": st.session_state.thread_id,
+                    "pubmed_search_requested": pubmed_search,
+                },
+                timeout=60,
+                stream=True,
+            )
+            response.raise_for_status()
+        except requests.RequestException as e:
+            st.error(f"Could not reach the backend at {BACKEND_URL}: {e}")
+            st.stop()
 
-        answer = data.get("answer", "Sorry, I couldn't generate a response.")
-        sources = data.get("sources") or []
-        thought_process = data.get("thought_process") or []
+        result_holder = {}
+        answer = st.write_stream(_stream_tokens(response, result_holder))
 
-        st.markdown(answer)
-        if sources:
-            with st.expander(f"Sources ({len(sources)})"):
-                for i, doc in enumerate(sources, start=1):
-                    st.markdown(f"**{i}.** {doc[:500]}{'…' if len(doc) > 500 else ''}")
-        if thought_process:
-            with st.expander("Thought process"):
-                for step in thought_process:
-                    st.markdown(f"- {step}")
+        if result_holder.get("error"):
+            answer = result_holder["error"]
+            st.markdown(answer)
+            citations = []
+            thought_process = []
+        else:
+            done = result_holder.get("done", {})
+            citations = done.get("citations") or []
+            thought_process = done.get("thought_process") or []
+            if citations:
+                _render_citations(citations)
+            if thought_process:
+                with st.expander("Thought process"):
+                    for step in thought_process:
+                        st.markdown(f"- {step}")
 
     st.session_state.history.append({
         "role": "assistant",
         "content": answer,
-        "sources": sources,
+        "citations": citations,
         "thought_process": thought_process,
     })

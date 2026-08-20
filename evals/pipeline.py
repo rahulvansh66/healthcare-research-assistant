@@ -24,18 +24,35 @@ REQUEST_TIMEOUT = 120      # seconds — guardrails + LangGraph + Groq can take 
 def detect_tool(thought_process: list) -> str:
     """
     Maps the thought_process list from /query response to a tool name.
-    Planner sets:  'Intent: Technical' + 'Search Term: ...' → retrieve_documents
-                   'Intent: Conversational/Memory'           → direct_answer
-    main.py sets:  'Intent: Guardrails Fired'                → guardrails
+    retriever sets: 'Tool: search_pubmed'    → search_pubmed (live PubMed search)
+                     'Tool: session_cache'    → session_cache (thread-scoped Qdrant cache hit)
+    planner sets:    'Intent: Conversational/Memory' → direct_answer
+    main.py sets:    'Intent: Guardrails Fired'       → guardrails
     """
     joined = " ".join(thought_process).lower()
     if "guardrails fired" in joined:
         return "guardrails"
-    if "intent: technical" in joined or "search term:" in joined or "context retrieved" in joined:
-        return "retrieve_documents"
+    if "tool: search_pubmed" in joined:
+        return "search_pubmed"
+    if "tool: session_cache" in joined:
+        return "session_cache"
     if "conversational" in joined or "memory" in joined:
         return "direct_answer"
     return "unknown"
+
+
+def _contexts_as_text(sources: list) -> list:
+    """
+    /query's "sources" are structured PubMedDocument dicts (pmid/title/abstract/...),
+    not raw strings. RAGAS metrics need retrieved text, so extract abstracts here.
+    """
+    texts = []
+    for s in sources:
+        if isinstance(s, dict):
+            texts.append(s.get("abstract") or s.get("title") or "")
+        else:
+            texts.append(str(s))
+    return texts
 
 
 def run_pipeline(golden_dataset: dict, progress_callback=None) -> dict:
@@ -74,7 +91,7 @@ def run_pipeline(golden_dataset: dict, progress_callback=None) -> dict:
                     sources = data.get("sources") or []
 
                     sample["actual_response"] = raw_answer[:RESPONSE_TRUNCATE]
-                    sample["actual_contexts"] = sources[:5]
+                    sample["actual_contexts"] = _contexts_as_text(sources)[:5]
                     sample["actual_tools_called"] = [detect_tool(thought_process)]
 
                     logfire.info(
