@@ -2,12 +2,17 @@
 
 An AI-powered research assistant that helps users explore **clinical research literature** by retrieving relevant articles from **PubMed** and generating evidence-grounded answers to research questions.
 
+![Clinical Research Assistant Demo](DOCS/demo/medico.png)
+
 ## What It Can Do
 
 - Retrieve relevant research articles from PubMed based on the user's query.
 - Answer clinical research questions using information from the retrieved literature.
 - Generate concise summaries of specific research papers.
 - Provide responses grounded in the retrieved scientific literature.
+- Keep multiple conversations going and switch between them from the sidebar, with history persisted in Postgres across backend restarts.
+
+
 
 ## Example Queries
 
@@ -25,19 +30,20 @@ An AI-powered research assistant that helps users explore **clinical research li
 ## Tech Stack
 
 
-| Layer                         | Technology                                        |
-| ----------------------------- | ------------------------------------------------- |
-| API & UI                      | FastAPI, Streamlit                                |
-| Agent Orchestration           | LangChain, LangGraph                              |
-| Literature Retrieval          | Live PubMed (NCBI E-utilities — ESearch + EFetch) |
-| Embeddings                    | Jina Embeddings API                               |
-| Session Cache / Vector Search | Qdrant (per-thread PubMed result cache)           |
-| Reranker                      | Jina Reranker API                                 |
-| LLM Gateway                   | Portkey + Groq                                    |
-| Query Cache                   | Portkey                                           |
-| Safety                        | NVIDIA NeMo Guardrails, regex-based PII filter    |
-| Observability                 | LangSmith, Logfire                                |
-| Evaluation                    | RAGAS, DeepEval                                   |
+| Layer                          | Technology                                        |
+| ------------------------------ | ------------------------------------------------- |
+| API & UI                       | FastAPI, Streamlit                                |
+| Agent Orchestration            | LangChain, LangGraph                              |
+| Literature Retrieval           | Live PubMed (NCBI E-utilities — ESearch + EFetch) |
+| Embeddings                     | Jina Embeddings API                               |
+| Session Cache / Vector Search  | Qdrant (per-thread PubMed result cache)           |
+| Reranker                       | Jina Reranker API                                 |
+| LLM Gateway                    | Portkey + Groq                                    |
+| Query Cache                    | Portkey                                           |
+| Conversation Memory / Sessions | Postgres (LangGraph checkpoints + sessions list)  |
+| Safety                         | NVIDIA NeMo Guardrails, regex-based PII filter    |
+| Observability                  | LangSmith, Logfire                                |
+| Evaluation                     | RAGAS, DeepEval                                   |
 
 
 ---
@@ -70,7 +76,7 @@ graph TD
     Critique -->|Unsupported claims| Caveat[Append Self-Check Note]
     Critique -->|Supported| Response
     Caveat --> Response
-    Responder -.-> Memory[(LangGraph MemorySaver)]
+    Responder -.-> Memory[(Postgres\nLangGraph Checkpoints)]
 ```
 
 
@@ -97,12 +103,20 @@ This matters in a clinical-research context: a silently corrected or dropped cla
 
 ### Prerequisites
 
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) (preferred) — or `pip` with `requirements.txt` as a fallback
+- Python 3.11+ with [uv](https://docs.astral.sh/uv/)
+- Docker + Docker Compose (for Postgres)
 
 
 
-### Installation
+### Configuration
+
+```bash
+cp .env.example .env
+```
+
+Fill in `.env` with your own credentials — see the comments in `.env.example` for what each variable is for. `NCBI_CONTACT_EMAIL` is required; Qdrant, Groq, Portkey, and Jina keys come from those services' own dashboards (Qdrant can be a free Cloud cluster — there's no local/self-hosted option in this setup).
+
+### Install
 
 ```bash
 # Preferred: uv resolves and installs from pyproject.toml / uv.lock
@@ -114,25 +128,16 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-
-
-### Configuration
-
-```bash
-cp .env.example .env
-```
-
-Fill in `.env` with your own credentials — see the comments in `.env.example` for what each variable is for. 
-
 ## Running the App
 
-There is no ingestion step — retrieval is live against PubMed at query time.
-
 ```bash
-# 1. Start the FastAPI backend
+# 1. Start Postgres
+docker compose up -d postgres
+
+# 2. Start the FastAPI backend
 uv run uvicorn app.main:app --reload
 
-# 2. In a separate terminal, start the Streamlit chat UI
+# 3. In a separate terminal, start the Streamlit chat UI
 uv run streamlit run streamlit_app.py
 ```
 

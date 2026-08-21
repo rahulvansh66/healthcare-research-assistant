@@ -20,6 +20,10 @@ class Settings:
     QDRANT_URL = os.getenv("QDRANT_CLUSTER_ENDPOINT")                # Qdrant cluster URL (secret: instance-specific)
     QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")                     # Qdrant auth key (secret)
     QDRANT_COLLECTION = _cfg["qdrant"]["collection"]                 # collection name for the per-thread PubMed cache
+    QDRANT_REQUEST_TIMEOUT = int(_cfg["qdrant"]["request_timeout"])  # seconds — HTTP timeout for Qdrant requests
+
+    # --- POSTGRES — durable LangGraph checkpoints + the sessions list (sidebar) ---
+    DATABASE_URL = os.getenv("DATABASE_URL")  # secret: instance-specific (local dev: docker compose up -d postgres)
 
     # --- PUBMED / NCBI E-UTILITIES ---
     # Secrets: .env only, never hardcoded.

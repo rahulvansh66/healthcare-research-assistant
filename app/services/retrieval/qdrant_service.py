@@ -18,7 +18,8 @@ _NAMESPACE = uuid.UUID("6f1b1a2e-6b9f-4a3a-9c1a-8e2d7f5b0c11")
 
 client = QdrantClient(
     url=settings.QDRANT_URL,
-    api_key=settings.QDRANT_API_KEY
+    api_key=settings.QDRANT_API_KEY,
+    timeout=settings.QDRANT_REQUEST_TIMEOUT
 )
 
 _collection_ready = False
