@@ -1,6 +1,7 @@
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from app.agents.state import AgentState
+from app.config import settings
 from app.agents.nodes.planner import planner_node
 from app.agents.nodes.retriever import retrieve_node
 from app.agents.nodes.evidence import evidence_agent_node
@@ -46,8 +47,13 @@ workflow.add_edge("responder", END)
 
 
 # --- MEMORY UPGRADE ---
-# MemorySaver allows the agent to remember conversations based on 'thread_id'
-checkpointer = MemorySaver()
+# PostgresSaver persists conversations by 'thread_id' so history (and the
+# sessions list) survives backend restarts. from_conn_string() is a
+# contextmanager; entered manually (never exited) so the pooled connection
+# lives for the process's lifetime, matching this module-level singleton.
+_checkpointer_cm = PostgresSaver.from_conn_string(settings.DATABASE_URL)
+checkpointer = _checkpointer_cm.__enter__()
+checkpointer.setup()
 
 
 # 4. Compile the Graph with Memory

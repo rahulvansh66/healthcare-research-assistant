@@ -10,7 +10,7 @@ load_dotenv()
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
-st.set_page_config(page_title="Medico — Healthcare Research Assistant", page_icon="🩺")
+st.set_page_config(page_title="Medico — Clinical Research Assistant", page_icon="🩺")
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
@@ -19,15 +19,53 @@ if "history" not in st.session_state:
     st.session_state.history = []
 
 st.title("🩺 Medico — Healthcare Research Assistant")
-st.caption("Grounded in WHO clinical guidelines. Not a substitute for professional medical advice.")
+# st.caption("Grounded in WHO clinical guidelines. Not a substitute for professional medical advice.")
+
+def _fetch_sessions():
+    try:
+        resp = requests.get(f"{BACKEND_URL}/sessions", timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException:
+        return []
+
+
+def _load_session(thread_id: str):
+    """Switches to an existing thread, replaying its messages from the
+    backend. Citations/thought-process aren't stored per historical turn,
+    so replayed assistant turns show text only."""
+    st.session_state.thread_id = thread_id
+    try:
+        resp = requests.get(f"{BACKEND_URL}/sessions/{thread_id}/history", timeout=10)
+        resp.raise_for_status()
+        messages = resp.json().get("messages", [])
+    except requests.RequestException:
+        messages = []
+    st.session_state.history = [
+        {"role": m["role"], "content": m["content"]} for m in messages
+    ]
+    st.rerun()
+
 
 with st.sidebar:
     st.subheader("Session")
-    st.text(f"Thread: {st.session_state.thread_id[:8]}")
-    if st.button("New conversation"):
+    if st.button("＋ New conversation", use_container_width=True):
         st.session_state.thread_id = str(uuid.uuid4())
         st.session_state.history = []
         st.rerun()
+    st.divider()
+    st.caption("Recent")
+    for session in _fetch_sessions():
+        is_current = session["thread_id"] == st.session_state.thread_id
+        label = session["title"] or "(untitled)"
+        if st.button(
+            label,
+            key=f"session_{session['thread_id']}",
+            type="primary" if is_current else "secondary",
+            use_container_width=True,
+        ):
+            if not is_current:
+                _load_session(session["thread_id"])
     st.divider()
     st.caption(f"Backend: {BACKEND_URL}")
 

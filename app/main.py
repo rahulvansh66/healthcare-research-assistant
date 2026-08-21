@@ -2,6 +2,15 @@
 # CRITICAL: logfire MUST be configured before ALL other imports
 # so that spans from all modules are captured from the start.
 # ============================================================
+import sys
+
+# Windows consoles default to a cp1252 codepage, which can't encode the emoji
+# used in log messages throughout this codebase and crashes logfire's console
+# exporter on every span. Force UTF-8 before logfire ever prints anything.
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import logfire
 import os
 from dotenv import load_dotenv
@@ -22,6 +31,7 @@ from app.agents.graph import rag_agent
 from app.config import settings
 from app.guardrails import initialize_rails, guard
 from app.services.retrieval.qdrant_service import store_session_results
+from app.services import sessions_service
 
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
@@ -29,6 +39,8 @@ from typing import Optional
 
 # Initialize FastAPI
 app = FastAPI(title="Enterprise Agentic RAG API")
+logfire.instrument_fastapi(app)
+logfire.instrument_requests()
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -38,6 +50,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 @app.on_event("startup")
 def startup_event():
     initialize_rails()
+    sessions_service.init_sessions_table()
 
 class QueryRequest(BaseModel):
     q: str = Field(..., min_length=1, max_length=settings.MAX_QUERY_CHARS)
@@ -67,6 +80,25 @@ def get_graph_image():
         return Response(content=png_bytes, media_type="image/png")
     except Exception as e:
         return {"error": f"Could not generate graph image: {e}"}
+
+
+@app.get("/sessions")
+def list_sessions():
+    """Sessions list for the sidebar, most recently active first."""
+    return sessions_service.list_sessions()
+
+
+@app.get("/sessions/{thread_id}/history")
+def get_session_history(thread_id: str):
+    """Replays a thread's messages from the LangGraph checkpoint so the UI
+    can rehydrate a past conversation when the user switches to it. Only
+    role/content are available per historical turn — citations and
+    thought-process are only ever computed for the turn just answered, not
+    persisted per message, so they're empty for replayed history."""
+    config = {"configurable": {"thread_id": thread_id}}
+    state = rag_agent.get_state(config)
+    messages = (state.values or {}).get("messages", []) if state else []
+    return {"thread_id": thread_id, "messages": messages}
 
 
 def _build_initial_state(q: str, body: QueryRequest) -> dict:
@@ -101,6 +133,7 @@ def query(request: Request, body: QueryRequest, background_tasks: BackgroundTask
 
     # Configuration for Memory (Thread ID)
     config = {"configurable": {"thread_id": thread_id}}
+    sessions_service.record_turn(thread_id, q)
 
     try:
         # Gate 1: NeMo Guardrails — blocks off-topic, jailbreaks, and handles dialog
@@ -163,6 +196,7 @@ def query_stream(request: Request, body: QueryRequest):
     initial_state = _build_initial_state(q, body)
     config = {"configurable": {"thread_id": thread_id}}
     background_tasks = BackgroundTasks()
+    sessions_service.record_turn(thread_id, q)
 
     def event_stream():
         try:

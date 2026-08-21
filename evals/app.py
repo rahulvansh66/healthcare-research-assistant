@@ -6,6 +6,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Windows consoles default to a cp1252 codepage, which can't encode the emoji
+# used in log messages throughout this codebase and crashes logfire's console
+# exporter on every span. Force UTF-8 before logfire ever prints anything.
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 from dotenv import load_dotenv
 load_dotenv()
 

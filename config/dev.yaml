@@ -4,6 +4,7 @@
 
 qdrant:
   collection: pubmed_session_cache  # Qdrant collection name for the per-thread PubMed result cache (payload-filtered by thread_id)
+  request_timeout: 30               # seconds — HTTP timeout for Qdrant requests (client default is 5s, too short for multi-chunk upserts)
 
 ncbi:
   tool_name: medico-healthcare-research-assistant  # sent as the E-utilities `tool` param, per NCBI usage policy
