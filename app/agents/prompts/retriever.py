@@ -1,7 +1,17 @@
-def build_query_rewrite_prompt(original_question: str, failed_query: str, attempt: int) -> str:
+def build_query_rewrite_prompt(
+    original_question: str,
+    failed_query: str,
+    attempt: int,
+    validator_feedback: str = "",
+) -> str:
+    feedback_block = (
+        f'\n    EVIDENCE VALIDATOR FEEDBACK (why the last results fell short):\n    "{validator_feedback}"\n'
+        if validator_feedback
+        else ""
+    )
     return f"""
     You are Medico's Retrieval Corrector. A PubMed search for the query below returned
-    results that were not relevant enough to the user's original question (retry attempt
+    results that did not sufficiently answer the user's original question (retry attempt
     {attempt}).
 
     ORIGINAL USER QUESTION:
@@ -9,7 +19,7 @@ def build_query_rewrite_prompt(original_question: str, failed_query: str, attemp
 
     PREVIOUS PUBMED SEARCH QUERY (too narrow, too broad, or otherwise off-target):
     "{failed_query}"
-
+    {feedback_block}
     Task:
     Rewrite the search query so it is more likely to surface relevant PubMed literature for
     the original question. Consider broadening or narrowing scope, using different but

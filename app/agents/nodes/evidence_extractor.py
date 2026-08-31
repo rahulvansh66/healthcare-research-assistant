@@ -8,7 +8,7 @@ from app.agents.state import AgentState
 from app.config import settings
 from app.gateway import get_langchain_llm
 
-llm = get_langchain_llm(feature="evidence_agent")
+llm = get_langchain_llm(feature="evidence_extractor")
 
 
 class EvidenceRecord(BaseModel):
@@ -27,19 +27,25 @@ class EvidenceExtraction(BaseModel):
 structured_llm = llm.with_structured_output(EvidenceExtraction)
 
 
-def evidence_agent_node(state: AgentState) -> dict:
+def evidence_extractor_node(state: AgentState) -> dict:
     """
-    Turns retrieved PubMed abstracts into structured, PMID-grounded Evidence
-    records. Never lets the LLM invent a citation: any record whose PMID isn't
-    among the retrieved documents is dropped before it reaches state.
+    Bounded transformation: turn retrieved PubMed abstracts (and full text, when
+    present) into structured, PMID-grounded Evidence records. Never lets the LLM
+    invent a citation — any record whose PMID isn't among the retrieved documents
+    is dropped before it reaches state.
+
+    This node no longer decides "insufficient" as a terminal outcome. It just
+    emits ``evidence: []`` when nothing usable comes back; the downstream
+    evidence_validator node + route_validator own the control-flow decision
+    (answer / rewrite the query / fall back to web search / give up).
     """
     documents = state["documents"]
 
     if not documents:
         return {
             "evidence": [],
-            "status": "No literature retrieved — insufficient evidence.",
-            "plan": state["plan"] + ["Tool: evidence_agent", "Evidence: Insufficient (no documents)"],
+            "status": "No literature retrieved.",
+            "plan": state["plan"] + ["Tool: evidence_extractor", "Evidence: none (no documents)"],
         }
 
     user_message = state["messages"][-1]["content"] if state["messages"] else state["current_query"]
@@ -77,12 +83,12 @@ def evidence_agent_node(state: AgentState) -> dict:
     if result.insufficient_evidence or not records:
         return {
             "evidence": [],
-            "status": "Retrieved literature does not sufficiently answer the question.",
-            "plan": state["plan"] + ["Tool: evidence_agent", "Evidence: Insufficient"],
+            "status": "No structured evidence extracted from the retrieved literature.",
+            "plan": state["plan"] + ["Tool: evidence_extractor", "Evidence Records: 0"],
         }
 
     return {
         "evidence": [r.model_dump() for r in records],
         "status": "Evidence extracted.",
-        "plan": state["plan"] + ["Tool: evidence_agent", f"Evidence Records: {len(records)}"],
+        "plan": state["plan"] + ["Tool: evidence_extractor", f"Evidence Records: {len(records)}"],
     }
