@@ -1,18 +1,31 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.agents.nodes import responder
 
 
+@pytest.fixture(autouse=True)
+def _no_stream_writer(monkeypatch):
+    """generate_node calls get_stream_writer() unconditionally; outside a live
+    graph run that raises, so stub it with a no-op sink for direct-call tests."""
+    monkeypatch.setattr(responder, "get_stream_writer", lambda: (lambda _delta: None))
+
+
+class _Stream(list):
+    """Iterable of delta chunks, with the optional cache-status header attr the
+    native Portkey response would carry."""
+
+    def __init__(self, chunks, cache_status=None):
+        super().__init__(chunks)
+        if cache_status is not None:
+            self._raw_response = MagicMock(headers={"x-portkey-cache-status": cache_status})
+
+
 def _completion(content, cache_status=None):
-    resp = MagicMock()
-    resp.choices = [MagicMock(message=MagicMock(content=content))]
-    if cache_status is not None:
-        resp._raw_response = MagicMock(headers={"x-portkey-cache-status": cache_status})
-    else:
-        resp._raw_response = None
-        resp._response = None
-        resp._http_response = None
-    return resp
+    chunk = MagicMock()
+    chunk.choices = [MagicMock(delta=MagicMock(content=content))]
+    return _Stream([chunk], cache_status=cache_status)
 
 
 def _state(query, evidence=None, documents=None, messages=None):
@@ -47,9 +60,11 @@ def test_insufficient_evidence_response_has_no_citations(monkeypatch):
 
     assert result["citations"] == []
     assert result["final_answer"] == "Not enough evidence."
+    # no evidence => terminal here, message appended by the responder
+    assert result["messages"] == [{"role": "assistant", "content": "Not enough evidence."}]
 
 
-def test_evidence_grounded_response_derives_citations_deterministically(monkeypatch, make_pubmed_document):
+def test_evidence_grounded_response_derives_citations_and_defers_message(monkeypatch, make_pubmed_document):
     doc = make_pubmed_document(pmid="111", title="A Study", journal="J", year="2024")
     ev = {"pmid": "111", "claim": "c", "evidence": "e", "study_type": "RCT", "confidence": "high"}
     monkeypatch.setattr(
@@ -67,6 +82,8 @@ def test_evidence_grounded_response_derives_citations_deterministically(monkeypa
         "study_type": "RCT",
         "url": "https://pubmed.ncbi.nlm.nih.gov/111/",
     }]
+    # grounded answers are appended to the transcript by claim_verifier, not here
+    assert "messages" not in result
 
 
 def test_dedupes_citations_by_pmid(make_pubmed_document, monkeypatch):
@@ -83,6 +100,21 @@ def test_dedupes_citations_by_pmid(make_pubmed_document, monkeypatch):
     result = responder.generate_node(_state("widget therapy", evidence=evidence, documents=[doc]))
 
     assert len(result["citations"]) == 1
+
+
+def test_web_fallback_response_has_no_citations(monkeypatch):
+    state = _state("widget therapy", evidence=[])
+    state["used_web_fallback"] = True
+    state["web_results"] = [{"title": "Src", "url": "https://x.example", "snippet": "s"}]
+    monkeypatch.setattr(
+        responder.portkey_client.chat.completions, "create",
+        MagicMock(return_value=_completion("From the web...")),
+    )
+
+    result = responder.generate_node(state)
+
+    assert result["citations"] == []
+    assert result["messages"] == [{"role": "assistant", "content": "From the web..."}]
 
 
 def test_cache_hit_updates_status_and_plan(monkeypatch):
@@ -103,8 +135,5 @@ def test_llm_failure_propagates(monkeypatch):
         MagicMock(side_effect=RuntimeError("gateway down")),
     )
 
-    try:
+    with pytest.raises(RuntimeError):
         responder.generate_node(_state("CONVERSATIONAL"))
-        assert False, "expected RuntimeError to propagate"
-    except RuntimeError:
-        pass

@@ -18,7 +18,7 @@ if "thread_id" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state.history = []
 
-st.title("🩺 Medico — Healthcare Research Assistant")
+st.title("🩺 Medico — Clinical Research Assistant")
 # st.caption("Grounded in WHO clinical guidelines. Not a substitute for professional medical advice.")
 
 def _fetch_sessions():
@@ -94,9 +94,21 @@ def _render_citations(citations):
             )
 
 
+def _render_web_sources(web_sources):
+    st.warning(
+        "Answered from a general web search — outside the curated PubMed evidence base. "
+        "Verify against primary sources before clinical use."
+    )
+    with st.expander(f"Web sources ({len(web_sources)})"):
+        for i, s in enumerate(web_sources, start=1):
+            st.markdown(f"**{i}.** [{s.get('title', 'Untitled')}]({s.get('url', '#')})")
+
+
 for turn in st.session_state.history:
     with st.chat_message(turn["role"]):
         st.markdown(turn["content"])
+        if turn.get("web_sources"):
+            _render_web_sources(turn["web_sources"])
         if turn.get("citations"):
             _render_citations(turn["citations"])
         if turn.get("thought_process"):
@@ -140,10 +152,14 @@ if question := st.chat_input("Ask about clinical guidelines, e.g. WHO hypertensi
             st.markdown(answer)
             citations = []
             thought_process = []
+            web_sources = []
         else:
             done = result_holder.get("done", {})
             citations = done.get("citations") or []
             thought_process = done.get("thought_process") or []
+            web_sources = done.get("web_sources") or []
+            if web_sources:
+                _render_web_sources(web_sources)
             if citations:
                 _render_citations(citations)
             if thought_process:
@@ -156,4 +172,5 @@ if question := st.chat_input("Ask about clinical guidelines, e.g. WHO hypertensi
         "content": answer,
         "citations": citations,
         "thought_process": thought_process,
+        "web_sources": web_sources,
     })

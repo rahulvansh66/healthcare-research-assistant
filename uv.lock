@@ -1049,6 +1049,7 @@ dependencies = [
     { name = "sentence-transformers" },
     { name = "slowapi" },
     { name = "streamlit" },
+    { name = "tavily-python" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1088,6 +1089,7 @@ requires-dist = [
     { name = "sentence-transformers", specifier = ">=5.7.0" },
     { name = "slowapi", specifier = ">=0.1.9" },
     { name = "streamlit", specifier = ">=1.61.1" },
+    { name = "tavily-python", specifier = ">=0.8.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.3" },
 ]
 
@@ -4407,6 +4409,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ec/fe/802052aecb21e3797b8f7902564ab6ea0d60ff8ca23952079064155d1ae1/tabulate-0.9.0.tar.gz", hash = "sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c", size = 81090, upload-time = "2022-10-06T17:21:48.54Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/40/44/4a5f08c96eb108af5cb50b41f76142f0afa346dfa99d5296fe7202a11854/tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f", size = 35252, upload-time = "2022-10-06T17:21:44.262Z" },
+]
+
+[[package]]
+name = "tavily-python"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "requests" },
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/c2/dd46d7e44093e710768f0584a9ad290148a215bd40d3f86d27e94a3e6203/tavily_python-0.8.0.tar.gz", hash = "sha256:e9e440df828a70ea9c4390f27778dbdc051159406c9c903bad1e6d8dc7df2fc4", size = 31192, upload-time = "2026-08-24T16:16:13.767Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/7b/4d125cd672540a075e20fc5131f039ba93d42d91cfcbd4348e99ad4eab77/tavily_python-0.8.0-py3-none-any.whl", hash = "sha256:c5aaea1dab5daad0e846e8603e54c6b9088cb6da8ce0d474f2114c6940941409", size = 22098, upload-time = "2026-08-24T16:16:12.784Z" },
 ]
 
 [[package]]

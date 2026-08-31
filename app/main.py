@@ -111,9 +111,16 @@ def _build_initial_state(q: str, body: QueryRequest) -> dict:
         "direct_pmid": None,
         "retrieval_source": "none",
         "retrieval_attempts": 0,
+        "rerank_top_score": 0.0,
         "documents": [],
         "evidence": [],
+        "evidence_verdict": None,
         "citations": [],
+        "web_results": None,
+        "used_web_fallback": False,
+        "verify_attempts": 0,
+        "unsupported_claims": [],
+        "needs_regeneration": False,
         "_background_store_payload": None,
         "plan": ["Start"],
         "status": "Initializing Graph..."
@@ -146,7 +153,8 @@ def query(request: Request, body: QueryRequest, background_tasks: BackgroundTask
                 "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
                 "status": "Blocked by guardrails.",
                 "sources": [],
-                "citations": []
+                "citations": [],
+                "web_sources": []
             }
 
         # Gate 2: LangGraph RAG pipeline
@@ -167,7 +175,8 @@ def query(request: Request, body: QueryRequest, background_tasks: BackgroundTask
             "thought_process": final_output.get("plan"),
             "status": final_output.get("status"),
             "sources": final_output.get("documents", []),
-            "citations": final_output.get("citations", [])
+            "citations": final_output.get("citations", []),
+            "web_sources": final_output.get("web_results") or []
         }
     except Exception as e:
         logfire.error(f"❌ Backend Execution Failed: {e}")
@@ -210,7 +219,8 @@ def query_stream(request: Request, body: QueryRequest):
                     "status": "Blocked by guardrails.",
                     "thought_process": ["Intent: Guardrails Fired", "Retrieval: Skipped"],
                     "sources": [],
-                    "citations": []
+                    "citations": [],
+                    "web_sources": []
                 }) + "\n"
                 return
 
@@ -239,7 +249,8 @@ def query_stream(request: Request, body: QueryRequest):
                 "status": final_output.get("status"),
                 "thought_process": final_output.get("plan"),
                 "sources": final_output.get("documents", []),
-                "citations": final_output.get("citations", [])
+                "citations": final_output.get("citations", []),
+                "web_sources": final_output.get("web_results") or []
             }) + "\n"
         except Exception as e:
             logfire.error(f"❌ Backend Execution Failed: {e}")
