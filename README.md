@@ -10,7 +10,7 @@ An AI-powered research assistant that helps users explore **clinical research li
 - Answer clinical research questions using information from the retrieved literature.
 - Generate concise summaries of specific research papers.
 - Provide responses grounded in the retrieved scientific literature.
-- Keep multiple conversations going and switch between them from the sidebar, with history persisted in Postgres across backend restarts.
+- Keep multiple conversations going and switch between them from the sidebar, with history persisted in Postgres.
 
 
 
@@ -25,10 +25,7 @@ An AI-powered research assistant that helps users explore **clinical research li
 
 > How does the Tang cell count correlate with COVID-19 disease severity?
 
-
-
 ## Tech Stack
-
 
 | Layer                          | Technology                                        |
 | ------------------------------ | ------------------------------------------------- |
@@ -49,43 +46,45 @@ An AI-powered research assistant that helps users explore **clinical research li
 ---
 
 
-
 ## Agentic AI workflow
 
+Simplified overview — the main path is the straight line down; dotted arrows are the two
+"skip" routes (see [CLAUDE.md](CLAUDE.md) for the full node graph):
+
 ```mermaid
-graph TD
-    User((User)) --> UI[Streamlit UI]
-    UI --> API[FastAPI /query]
-    API --> PII{PII Check}
-    PII -->|Blocked| Response[Response to User]
-    PII -->|Pass| Guard{NeMo Guardrails}
-    Guard -->|Blocked| Response
-    Guard -->|Pass| Planner{Planner Node}
-    Planner -->|Conversational| Responder[Responder Node]
-    Planner -->|Clinical| Retriever[Retriever Node]
-    Retriever -->|Fresh search| PubMed[(Live PubMed\nESearch + EFetch)]
-    Retriever -->|Cached| SessionCache[(Qdrant Session Cache)]
-    PubMed --> Reranker[Jina Reranker API]
-    Reranker -->|Relevant| SessionCache
-    Reranker -->|Below threshold, retries left| Rewrite[CRAG Query Rewrite]
-    Rewrite --> PubMed
-    Reranker --> Evidence[Evidence Agent]
-    SessionCache --> Evidence
-    Evidence --> Responder
-    Responder --> Critique{Self-Critique}
-    Critique -->|Unsupported claims| Caveat[Append Self-Check Note]
-    Critique -->|Supported| Response
-    Caveat --> Response
-    Responder -.-> Memory[(Postgres\nLangGraph Checkpoints)]
+flowchart TD
+    Q[User query] --> G{Guardrails}
+    G -. blocked .-> X[Rejection message]
+    G --> P[Planner]
+    P --> R[Retriever]
+    R --> EX[Evidence extractor]
+    EX --> V[Evidence validator]
+    V --> RS[Responder]
+    RS --> CV[Claim verifier]
+    CV --> A[Answer + citations]
+
+    P -. normal-chat .-> RS
+    V -. not in PubMed .-> W[Web search fallback] -.-> RS
 ```
 
+Two bounded retry loops aren't drawn: if the validator finds the evidence off-target it sends a
+rewritten query back to the retriever (CRAG), and if the claim verifier finds unsupported claims
+it sends the draft back to the responder to regenerate.
 
 
-Each query first passes a regex-based PII check and the NeMo Guardrails gate (off-topic/jailbreak/self-check) before reaching the LangGraph agent.
 
- The `planner` classifies the message as conversational or clinical; for clinical queries the `retriever` runs a live PubMed search (or reuses this thread's cached results) and reranks with the Jina Reranker API, if the top reranked result is below a relevance threshold, it's treated as a **Corrective-RAG (CRAG)** miss: the query is rewritten and the search retried, up to a bounded number of attempts, before falling through to whatever is best-available. 
+**Step by step:**
 
-The `evidence_agent` then extracts PMID-grounded evidence, and the `responder` generates a citation-backed answer and **self-critiques** it against that evidence, if it finds claims the evidence doesn't support, it deterministically appends a visible "Self-Check Note" caveat rather than silently rewriting the answer. 
+- **Guardrails** — every query first hits a regex PII check and the NeMo Guardrails gate (off-topic / jailbreak / self-check); blocked queries never reach the agent.
+- **Planner** — classifies the message as conversational (answer from memory) or clinical (retrieve); also detects a pasted PMID/URL for direct lookup.
+- **Retriever** — one live PubMed search (or this thread's Qdrant cache), reranked by the Jina Reranker API.
+- **Evidence extractor** — turns abstracts into PMID-grounded evidence records; drops any record citing a PMID outside the retrieved set.
+- **Evidence validator** — a claim-level sufficiency check; the graph routes on its verdict:
+  - *sufficient* → responder
+  - *`query_failure` / `population_mismatch`* → `query_rewriter` rewrites the query and the retriever re-runs — a **Corrective-RAG (CRAG)** loop bounded by `CRAG_MAX_RETRIES`
+  - *`corpus_failure`* (topic isn't in PubMed), or the CRAG loop has retried `CRAG_MAX_RETRIES` times without finding good evidence → Tavily web search; the answer carries an explicit "outside the curated PubMed evidence base" disclaimer + source links
+- **Responder** — generates a citation-backed answer; citations are derived deterministically from the evidence, not from the LLM's prose.
+- **Claim verifier** — fact-checks the answer against its evidence. Unsupported claims send the draft back to the responder once for a rewrite; if any remain, the answer keeps them but adds a visible ⚠️ caveat.
 
 ```
 ...normal answer text about the drug's efficacy...
@@ -95,7 +94,7 @@ The following statement(s) may not be fully supported by the retrieved evidence:
 - Metformin reduces cardiovascular mortality by 30% in non-diabetic patients
 ```
 
-This matters in a clinical-research context: a silently corrected or dropped claim would hide the exact statement a user shouldn't act on, whereas a visible caveat lets them judge the flagged claim themselves.  
+In a clinical-research context a silently dropped claim would hide the exact statement a user shouldn't act on; a visible caveat lets them judge it themselves.
 
 ## Setup
 
